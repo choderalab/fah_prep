@@ -5,7 +5,7 @@ from difflib import ndiff
 
 import numpy as np
 
-from prepare.receptors import prepare_receptor
+from prepare.receptors import prepare_receptor, PreparationConfig
 
 FILE_SUFFIX_TO_TEST = ['-protein.pdb', '-ligand.mol2', '-ligand.pdb', '-ligand.sdf']
 data_dir = Path(__file__).parent.joinpath('data')
@@ -25,18 +25,28 @@ def files_are_same(file1: Path, file2: Path) -> bool:
 
 
 def test_prepare_receptor() -> None:
-    print('current wb', Path().absolute())
-
     prefix = 'Mpro-N0029_0A_bound'
     out_files = [f"{prefix}{suffix}" for suffix in FILE_SUFFIX_TO_TEST]
     pdb_file = data_dir.joinpath(f'{prefix}.pdb')
     with tempfile.TemporaryDirectory() as tmp:
-        prepare_receptor(complex_pdb_filename=str(pdb_file), output_basepath=tmp)
         tmp = Path(tmp)
+        prepare_receptor(PreparationConfig(input=pdb_file, output=tmp, is_dimer=True))
         tests = [files_are_same(tmp.joinpath(file), data_dir.joinpath(file)) for file in out_files]
     if not np.all(tests):
         print([out_files[i] for i in range(len(out_files)) if not tests[i]])
     assert np.all(tests)
+
+
+def test_prepare_xchem_receptor() -> None:
+    raise NotImplementedError
+
+
+# def test_dimer_receptor() -> None:
+#     prefix = 'Mpro-N0029_0A_bound'
+#     out_files = [f"{prefix}{suffix}" for suffix in FILE_SUFFIX_TO_TEST]
+#     pdb_file = data_dir.joinpath(f'{prefix}.pdb')
+#     with tempfile.TemporaryDirectory() as tmp:
+#         tmp = Path(tmp)
 
 
 

@@ -11,16 +11,45 @@ from pathlib import Path
 import argparse
 import glob
 import itertools
+import tempfile
 
 import rich
 import openeye
+from openeye import oespruce
+from openeye import oedocking
+import numpy as np
 from openeye import oechem
 from zipfile import ZipFile
 
-from .constants import BIOLOGICAL_SYMMETRY_HEADER, SEQRES, FRAGALYSIS_URL
+from .constants import BIOLOGICAL_SYMMETRY_HEADER, SEQRES, FRAGALYSIS_URL, MINIMUM_FRAGMENT_SIZE
+
 
 # structures_path = '../Mpro_tests'
 # output_basepath = '../receptors'
+
+
+class PreparationConfig(NamedTuple):
+    input: Path
+    output: Path
+    is_dimer: bool
+    retain_water: Optional[bool] = False
+
+    def __str__(self):
+        msg = f"\n{str(self.input.absolute())}" \
+              f"\n{str(self.output.absolute())}" \
+              f"\n{str(self.is_dimer)}" \
+              f"\n{str(self.retain_water)}"
+        return msg
+
+
+class OutputPaths(NamedTuple):
+    receptor_gzipped: Path
+    receptor_thiolate_gzipped: Path
+    protein_pdb: Path
+    protein_thiolate_pdb: Path
+    ligand_pdb: Path
+    ligand_sdf: Path
+    ligand_mol2: Path
 
 
 def download_url(url, save_path, chunk_size=128):
@@ -59,182 +88,139 @@ def read_pdb_file(pdb_file):
     return (mol)
 
 
-def is_diamond_structure(file_name: str) -> bool:
-    flag = re.search(r'-x\d+_', file_name) is not None
+def is_diamond_structure(pdb_path: Path) -> bool:
+    flag = re.search(r'-x\d+_', str(pdb_path.stem)) is not None
     return flag
 
 
-def prepare_receptor(complex_path: Path, output_path: Path,
-                     dimer: Optional[bool] = False, retain_water: Optional[bool] = False) -> None:
-    """
-    Parameters
-    ----------
-    complex_path : str
-        The complex PDB file to read in
-    output_path : str
-        Base path for output
-    dimer : bool, optional, default=False
-        If True, generate the dimer as the biological unit
-    retain_water : bool, optional, default=False
-        If True, will retain waters
-    """
-    # Check whether this is a diamond SARS-CoV-2 Mpro structure or not
+def remove_from_lines(lines: List[str], string: str) -> List[str]:
+    return [line for line in lines if string not in line]
 
-    # complex_file_name = str(complex_file_name)
-    # # output_base_path = str(output_base_path)
-    # basepath = complex_file_name.parent
-    # filename = complex_file_name.name
-    # # basepath, filename = os.path.split(complex_file_name)
-    #
-    # prefix, extension = os.path.splitext(filename)
-    # prefix = os.path.join(output_base_path, prefix)
 
-    # Check if receptor already exists
-    receptor_filename = output_path.joinpath(f'{complex_path.stem}-receptor.oeb.gz')
-    thiolate_receptor_filename = output_path.joinpath(f'{complex_path.stem}-receptor-thiolate.oeb.gz')
+def is_in_lines(lines: List[str], string: str) -> bool:
+    return np.any([string in line for line in lines])
 
-    if os.path.exists(receptor_filename) and os.path.exists(thiolate_receptor_filename):
-        return
 
-    # Read in PDB file, skipping UNK atoms (left over from processing covalent ligands)
-    pdbfile_lines = [line for line in open(complex_path, 'r') if 'UNK' not in line]
+def add_prefix(lines: List[str], prefix: str) -> List[str]:
+    return [line + '\n' for line in prefix.split('\n')] + lines
 
-    # Check if biological symmetry header is present
-    has_biological_symmetry_header = False
-    for line in pdbfile_lines:
-        if 'REMARK 350' in line:
-            has_biological_symmetry_header = True
-            break
 
-    # Prepend REMARK 350 (biological symmetry) header lines for Mpro (from 5RGG) if not present
-    if is_diamond_structure(complex_path) and (not has_biological_symmetry_header):
-        pdbfile_lines = [ line+'\n' for line in BIOLOGICAL_SYMMETRY_HEADER.split('\n') ] + pdbfile_lines
+def lines_to_mol_graph(lines: List[str]) -> oechem.OEGraphMol:
 
-    # If monomer is specified, drop crystal symmetry lines
-    if not dimer:
-        pdbfile_lines = [ line for line in pdbfile_lines if 'REMARK 350' not in line ]
-
-    # Filter out waters
-    if not retain_water:
-        pdbfile_lines = [ line for line in pdbfile_lines if 'HOH' not in line ]
-
-    # Filter out LINK records to covalent inhibitors so we can model non-covalent complex
-    pdbfile_lines = [ line for line in pdbfile_lines if 'LINK' not in line ]
-
-    # Reconstruct PDBFile contents
-    pdbfile_contents = ''.join(pdbfile_lines)
-
-    # Append SEQRES to all structures if they do not have it
-    has_seqres = 'SEQRES' in pdbfile_contents
-    if not has_seqres:
-        #print('Adding SEQRES')
-        pdbfile_contents = SEQRES + pdbfile_contents
-
-    # Read the receptor and identify design units
-    from openeye import oespruce, oechem
-    from tempfile import NamedTemporaryFile
-    with NamedTemporaryFile(delete=False, mode='wt', suffix='.pdb') as pdbfile:
-        pdbfile.write(pdbfile_contents)
+    with tempfile.NamedTemporaryFile(delete=False, mode='wt', suffix='.pdb') as pdbfile:
+        pdbfile.write(''.join(lines))
         pdbfile.close()
         complex = read_pdb_file(pdbfile.name)
-        # TODO: Clean up
 
+    return complex
+
+
+def create_molecular_graph(config: PreparationConfig) -> oechem.OEGraphMol:
+    with config.input.open() as f:
+        pdbfile_lines = f.readlines()
+
+    pdbfile_lines = remove_from_lines(pdbfile_lines, 'UNK')
+
+    if is_diamond_structure(config.input) and (not is_in_lines(pdbfile_lines, 'REMARK 350')):
+        pdbfile_lines = add_prefix(pdbfile_lines, BIOLOGICAL_SYMMETRY_HEADER)
+
+    if not config.is_dimer:
+        pdbfile_lines = remove_from_lines(pdbfile_lines, 'REMARK 350')
+
+    if not config.retain_water:
+        pdbfile_lines = remove_from_lines(pdbfile_lines, 'HOH')
+
+    pdbfile_lines = remove_from_lines(pdbfile_lines, 'LINK')
+
+    if not is_in_lines(pdbfile_lines, 'SEQRES'):
+        pdbfile_lines = add_prefix(pdbfile_lines, SEQRES)
+
+    return lines_to_mol_graph(pdbfile_lines)
+
+
+def strip_hydrogens(complex: oechem.OEGraphMol) -> oechem.OEGraphMol:
     # Strip protons from structure to allow SpruceTK to add these back
     # See: 6wnp, 6wtj, 6wtk, 6xb2, 6xqs, 6xqt, 6xqu, 6m2n
-    #print('Suppressing hydrogens')
-    #print(f' Initial: {sum([1 for atom in complex.GetAtoms()])} atoms')
     for atom in complex.GetAtoms():
         if atom.GetAtomicNum() > 1:
             oechem.OESuppressHydrogens(atom)
-    #print(f' Final: {sum([1 for atom in complex.GetAtoms()])} atoms')
+    return complex
 
+
+def already_prepared(outputs: OutputPaths) -> bool:
+    return np.all([x.exists() for x in outputs])
+
+
+def rebuild_c_terminal(complex: oechem.OEGraphMol) -> oechem.OEGraphMol:
     # Delete and rebuild C-terminal residue because Spruce causes issues with this
     # See: 6m2n 6lze
-    #print('Deleting C-terminal residue O')
     pred = oechem.OEIsCTerminalAtom()
     for atom in complex.GetAtoms():
         if pred(atom):
             for nbor in atom.GetAtoms():
                 if oechem.OEGetPDBAtomIndex(nbor) == oechem.OEPDBAtomName_O:
                     complex.DeleteAtom(nbor)
+    return complex
 
-    #pred = oechem.OEAtomMatchResidue(["GLN:306:.*:.*:.*"])
-    #for atom in complex.GetAtoms(pred):
-    #    if oechem.OEGetPDBAtomIndex(atom) == oechem.OEPDBAtomName_O:
-    #        print('Deleting O')
-    #        complex.DeleteAtom(atom)
 
-    #het = oespruce.OEHeterogenMetadata()
-    #het.SetTitle("LIG")  # real ligand 3 letter code
-    #het.SetID("CovMoonShot1234")  # in case you have corporate IDs
-    #het.SetType(oespruce.OEHeterogenType_Ligand)
-    #   mdata.AddHeterogenMetadata(het)
+def create_output_filenames(config: PreparationConfig) -> OutputPaths:
+    prefix = config.output.joinpath(config.input.stem)
+    stem = config.input.stem
+    outputs = OutputPaths(
+        receptor_gzipped=config.output.joinpath(f'{stem}-receptor.oeb.gz'),
+        receptor_thiolate_gzipped=config.output.joinpath(f'{stem}-receptor-thiolate.oeb.gz'),
+        protein_pdb=config.output.joinpath(f'{stem}-protein.pdb'),
+        protein_thiolate_pdb=config.output.joinpath(f'{stem}-protein-thiolate.pdb'),
+        ligand_pdb=config.output.joinpath(f'{stem}-ligand.pdb'),
+        ligand_sdf=config.output.joinpath(f'{stem}-ligand.sdf'),
+        ligand_mol2=config.output.joinpath(f'{stem}-ligand.mol2')
+    )
+    return outputs
 
-    #print('Identifying design units...')
-    # Produce zero design units if we fail to protonate
 
-    # Log warnings
-    errfs = oechem.oeosstream() # create a stream that writes internally to a stream
-    oechem.OEThrow.SetOutputStream(errfs)
-    oechem.OEThrow.Clear()
-    oechem.OEThrow.SetLevel(oechem.OEErrorLevel_Verbose) # capture verbose error output
-
-    opts = oespruce.OEMakeDesignUnitOptions()
-    #print(f'ligand atoms: min {opts.GetSplitOptions().GetMinLigAtoms()}, max {opts.GetSplitOptions().GetMaxLigAtoms()}')
-    opts.GetSplitOptions().SetMinLigAtoms(7) # minimum fragment size (in heavy atoms)
-
-    mdata = oespruce.OEStructureMetadata();
-    opts.GetPrepOptions().SetStrictProtonationMode(True);
-
+def set_options() -> oespruce.OEMakeDesignUnitOptions:
     # Both N- and C-termini should be zwitterionic
     # Mpro cleaves its own N- and C-termini
     # See https://www.pnas.org/content/113/46/12997
-    opts.GetPrepOptions().GetBuildOptions().SetCapNTermini(False);
-    opts.GetPrepOptions().GetBuildOptions().SetCapCTermini(False);
     # Don't allow truncation of termini, since force fields don't have parameters for this
-    opts.GetPrepOptions().GetBuildOptions().GetCapBuilderOptions().SetAllowTruncate(False);
     # Build loops and sidechains
-    opts.GetPrepOptions().GetBuildOptions().SetBuildLoops(True);
-    opts.GetPrepOptions().GetBuildOptions().SetBuildSidechains(True);
 
-    # Don't flip Gln189
-    #pred = oechem.OEAtomMatchResidue(["GLN:189: :A"])
-    pred = oechem.OEAtomMatchResidue(["GLN:189:.*:.*:.*"])
-    protonate_opts = opts.GetPrepOptions().GetProtonateOptions();
+    opts = oespruce.OEMakeDesignUnitOptions()
+
+    opts.GetSplitOptions().SetMinLigAtoms(MINIMUM_FRAGMENT_SIZE) # minimum fragment size (in heavy atoms)
+    opts.GetPrepOptions().SetStrictProtonationMode(True)
+
+    opts.GetPrepOptions().GetBuildOptions().SetCapNTermini(False)
+    opts.GetPrepOptions().GetBuildOptions().SetCapCTermini(False)
+    opts.GetPrepOptions().GetBuildOptions().SetBuildLoops(True)
+    opts.GetPrepOptions().GetBuildOptions().SetBuildSidechains(True)
+
+    opts.GetPrepOptions().GetBuildOptions().GetCapBuilderOptions().SetAllowTruncate(False)
+
+    return opts
+
+
+def prevent_flip(options: oespruce.OEMakeDesignUnitOptions, match_strings: List[str]) -> oespruce.OEMakeDesignUnitOptions:
+    pred = oechem.OEAtomMatchResidue(match_strings)
+    protonate_opts = options.GetPrepOptions().GetProtonateOptions()
     place_hydrogens_opts = protonate_opts.GetPlaceHydrogensOptions()
-    #place_hydrogens_opts.SetBypassPredicate(pred)
+    # place_hydrogens_opts.SetBypassPredicate(pred)
     place_hydrogens_opts.SetNoFlipPredicate(pred)
-    #protonate_opts = oespruce.OEProtonateDesignUnitOptions(place_hydrogens_opts)
-    #opts.GetPrepOptions().SetProtonateOptions(protonate_options);
+    return options
 
-    # Make design units
-    design_units = list(oespruce.OEMakeDesignUnits(complex, mdata, opts))
 
-    # Restore error stream
-    oechem.OEThrow.SetOutputStream(oechem.oeerr)
+def make_design_units(complex: oechem.OEGraphMol, metadata: oespruce.OEStructureMetadata,
+                      options: oespruce.OEMakeDesignUnitOptions) -> List[oechem.OEDesignUnit]:
+    dus = list(oespruce.OEMakeDesignUnits(complex, metadata, options))
+    if len(dus) == 0:
+        raise RuntimeError('No design units found.')
+    return dus
 
-    # Capture the warnings to a string
-    warnings = errfs.str().decode("utf-8")
 
-    if len(design_units) >= 1:
-        design_unit = design_units[0]
-        print('')
-        print('')
-        print(f'{complex_path} : SUCCESS')
-        print(warnings)
-    elif len(design_units) == 0:
-        print('')
-        print('')
-        print(f'{complex_path} : FAILURE')
-        print(warnings)
-        msg = f'No design units found for {complex_path}\n'
-        msg += warnings
-        msg += '\n'
-        raise Exception(msg)
+# class DockingSytem:
 
-    # Prepare the receptor
-    #print('Preparing receptor...')
-    from openeye import oedocking
+
+def make_receptor(design_unit: oechem.OEDesignUnit)-> oechem.OEGraphMol:
     protein = oechem.OEGraphMol()
     design_unit.GetProtein(protein)
     ligand = oechem.OEGraphMol()
@@ -243,20 +229,46 @@ def prepare_receptor(complex_path: Path, output_path: Path,
     # Create receptor and other files
     receptor = oechem.OEGraphMol()
     oedocking.OEMakeReceptor(receptor, protein, ligand)
-    oedocking.OEWriteReceptorFile(receptor, receptor_filename)
+    return receptor
 
-    with oechem.oemolostream(f'{prefix}-protein.pdb') as ofs:
+def prepare_receptor(config: PreparationConfig) -> None:
+    output_filenames = create_output_filenames(config)
+
+    if already_prepared(output_filenames):
+        return
+
+    complex = create_molecular_graph(config)
+    complex = strip_hydrogens(complex)
+    complex = rebuild_c_terminal(complex)
+
+    # Log warnings
+    errfs = oechem.oeosstream() # create a stream that writes internally to a stream
+    oechem.OEThrow.SetOutputStream(errfs)
+    oechem.OEThrow.Clear()
+    oechem.OEThrow.SetLevel(oechem.OEErrorLevel_Verbose) # capture verbose error output
+
+    opts = set_options()
+    opts = prevent_flip(opts, match_strings=["GLN:189:.*:.*:.*"])
+    mdata = oespruce.OEStructureMetadata()
+
+    design_units = make_design_units(complex, mdata, opts)
+    design_unit = design_units[0]
+
+
+    oedocking.OEWriteReceptorFile(receptor, str(output_filenames.receptor_gzipped))
+
+    with oechem.oemolostream(str(output_filenames.protein_pdb)) as ofs:
         oechem.OEWriteMolecule(ofs, protein)
-    with oechem.oemolostream(f'{prefix}-ligand.mol2') as ofs:
+    with oechem.oemolostream(str(output_filenames.ligand_mol2)) as ofs:
         oechem.OEWriteMolecule(ofs, ligand)
-    with oechem.oemolostream(f'{prefix}-ligand.pdb') as ofs:
+    with oechem.oemolostream(str(output_filenames.ligand_pdb)) as ofs:
         oechem.OEWriteMolecule(ofs, ligand)
-    with oechem.oemolostream(f'{prefix}-ligand.sdf') as ofs:
+    with oechem.oemolostream(str(output_filenames.ligand_sdf)) as ofs:
         oechem.OEWriteMolecule(ofs, ligand)
 
     # Filter out UNK from PDB files (which have covalent adducts)
-    pdbfile_lines = [ line for line in open(f'{prefix}-protein.pdb', 'r') if 'UNK' not in line ]
-    with open(f'{prefix}-protein.pdb', 'wt') as outfile:
+    pdbfile_lines = [line for line in  output_filenames.protein_pdb.open(mode='r') if 'UNK' not in line]
+    with output_filenames.protein_pdb.open(mode='wt') as outfile:
         outfile.write(''.join(pdbfile_lines))
 
     # Adjust protonation state of CYS145 to generate thiolate form
@@ -300,14 +312,14 @@ def prepare_receptor(complex_path: Path, output_path: Path,
     # Write thiolate form of receptor
     receptor = oechem.OEGraphMol()
     oedocking.OEMakeReceptor(receptor, protein, ligand)
-    oedocking.OEWriteReceptorFile(receptor, thiolate_receptor_filename)
+    oedocking.OEWriteReceptorFile(receptor, str(output_filenames.receptor_thiolate_gzipped))
 
-    with oechem.oemolostream(f'{prefix}-protein-thiolate.pdb') as ofs:
+    with oechem.oemolostream(str(output_filenames.protein_thiolate_pdb)) as ofs:
         oechem.OEWriteMolecule(ofs, protein)
 
     # Filter out UNK from PDB files (which have covalent adducts)
-    pdbfile_lines = [ line for line in open(f'{prefix}-protein-thiolate.pdb', 'r') if 'UNK' not in line ]
-    with open(f'{prefix}-protein-thiolate.pdb', 'wt') as outfile:
+    pdbfile_lines = [ line for line in output_filenames.protein_thiolate_pdb.open(mode='r') if 'UNK' not in line ]
+    with output_filenames.protein_thiolate_pdb.open(mode='wt') as outfile:
         outfile.write(''.join(pdbfile_lines))
 
 
@@ -316,16 +328,6 @@ def download_fragalysis_latest(structures_path: Path) -> None:
     download_url(FRAGALYSIS_URL, zip_path)
     with ZipFile(zip_path, 'r') as zip_obj:
         zip_obj.extractall(structures_path)
-
-
-class PreparationConfig(NamedTuple):
-    input: Path
-    output: Path
-    is_dimer: bool
-
-    def __str__(self):
-        msg = f"\n{str(self.input.absolute())}\n{str(self.output.absolute())}\n{str(self.is_dimer)}"
-        return msg
 
 
 def get_structures(args: argparse.Namespace) -> List[Path]:
@@ -345,7 +347,7 @@ def define_prep_configs(args: argparse.Namespace) -> List[PreparationConfig]:
     input_paths = get_structures(args)
     output_paths = [args.output_directory.joinpath(subdir) for subdir in ['monomer', 'dimer']]
     products = list(itertools.product(input_paths, output_paths))
-    configs = [PreparationConfig(input=x, output=y, is_dimer=y.stem=='dimer') for x, y in
+    configs = [PreparationConfig(input=x, output=y, is_dimer=y.stem == 'dimer') for x, y in
                products]
     return configs
 
@@ -372,4 +374,4 @@ if __name__ == '__main__':
         if args.dry_run:
             print(config)
         else:
-            prepare_receptor(config.input, config.output, config.is_dimer)
+            prepare_receptor(config)
