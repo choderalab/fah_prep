@@ -27,6 +27,11 @@ from .constants import BIOLOGICAL_SYMMETRY_HEADER, SEQRES, FRAGALYSIS_URL, MINIM
 # structures_path = '../Mpro_tests'
 # output_basepath = '../receptors'
 
+class DockingSystem(NamedTuple):
+    protein: oechem.OEGraphMol
+    ligand: oechem.OEGraphMol
+    receptor: oechem.OEGraphMol
+
 
 class PreparationConfig(NamedTuple):
     input: Path
@@ -217,19 +222,62 @@ def make_design_units(complex: oechem.OEGraphMol, metadata: oespruce.OEStructure
     return dus
 
 
-# class DockingSytem:
-
-
-def make_receptor(design_unit: oechem.OEDesignUnit)-> oechem.OEGraphMol:
+def make_docking_system(design_unit: oechem.OEDesignUnit) -> DockingSystem:
     protein = oechem.OEGraphMol()
     design_unit.GetProtein(protein)
+
     ligand = oechem.OEGraphMol()
     design_unit.GetLigand(ligand)
 
-    # Create receptor and other files
     receptor = oechem.OEGraphMol()
     oedocking.OEMakeReceptor(receptor, protein, ligand)
-    return receptor
+
+    system = DockingSystem(protein=protein,
+                           ligand=ligand,
+                           receptor=receptor)
+    return system
+
+
+def write_receptor(receptor: oechem.OEGraphMol, paths: List[Path]) -> None:
+    for path in paths:
+        oedocking.OEWriteReceptorFile(receptor, str(path))
+
+
+def write_protein(protein: oechem.OEGraphMol, paths: List[Path]) -> None:
+    for path in paths:
+        with oechem.oemolostream(str(path)) as ofs:
+            oechem.OEWriteMolecule(ofs, protein)
+
+        with path.open(mode='rt') as f:
+            pdbfile_lines = f.readlines()
+
+        pdbfile_lines = remove_from_lines(pdbfile_lines, 'UNK')
+
+        with path.open(mode='wt') as outfile:
+            outfile.write(''.join(pdbfile_lines))
+
+
+def write_molecular_graph(molecule: oechem.OEGraphMol, paths: List[Path]) -> None:
+    for path in paths:
+        with oechem.oemolostream(str(path)) as ofs:
+            oechem.OEWriteMolecule(ofs, molecule)
+
+
+def write_docking_system(docking_system: DockingSystem, filenames: OutputPaths,
+                         is_thiolate: Optional[bool] = False) -> None:
+    if is_thiolate:
+        receptor_path = filenames.receptor_thiolate_gzipped
+        protein_path = filenames.protein_thiolate_pdb
+    else:
+        receptor_path = filenames.receptor_gzipped
+        protein_path = filenames.protein_pdb
+
+    write_receptor(receptor=docking_system.receptor, paths=[receptor_path])
+    write_protein(protein=docking_system.protein, paths=[protein_path])
+    write_molecular_graph(molecule=docking_system.ligand, paths=[filenames.ligand_sdf,
+                                                                 filenames.ligand_pdb,
+                                                                 filenames.ligand_mol2])
+
 
 def prepare_receptor(config: PreparationConfig) -> None:
     output_filenames = create_output_filenames(config)
@@ -249,27 +297,19 @@ def prepare_receptor(config: PreparationConfig) -> None:
 
     opts = set_options()
     opts = prevent_flip(opts, match_strings=["GLN:189:.*:.*:.*"])
+
     mdata = oespruce.OEStructureMetadata()
 
     design_units = make_design_units(complex, mdata, opts)
     design_unit = design_units[0]
 
+    docking_sytem = make_docking_system(design_unit)
+    write_docking_system(docking_sytem, output_filenames, is_thiolate=False)
 
-    oedocking.OEWriteReceptorFile(receptor, str(output_filenames.receptor_gzipped))
-
-    with oechem.oemolostream(str(output_filenames.protein_pdb)) as ofs:
-        oechem.OEWriteMolecule(ofs, protein)
-    with oechem.oemolostream(str(output_filenames.ligand_mol2)) as ofs:
-        oechem.OEWriteMolecule(ofs, ligand)
-    with oechem.oemolostream(str(output_filenames.ligand_pdb)) as ofs:
-        oechem.OEWriteMolecule(ofs, ligand)
-    with oechem.oemolostream(str(output_filenames.ligand_sdf)) as ofs:
-        oechem.OEWriteMolecule(ofs, ligand)
-
-    # Filter out UNK from PDB files (which have covalent adducts)
-    pdbfile_lines = [line for line in  output_filenames.protein_pdb.open(mode='r') if 'UNK' not in line]
-    with output_filenames.protein_pdb.open(mode='wt') as outfile:
-        outfile.write(''.join(pdbfile_lines))
+    protonate_opts = opts.GetPrepOptions().GetProtonateOptions()
+    place_hydrogens_opts = protonate_opts.GetPlaceHydrogensOptions()
+    protein = docking_sytem.protein
+    ligand = docking_sytem.ligand
 
     # Adjust protonation state of CYS145 to generate thiolate form
     #print('Deprotonating CYS145...') # DEBUG
