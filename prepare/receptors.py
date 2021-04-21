@@ -4,7 +4,7 @@ Prepare all SARS-CoV-2 Mpro structures for docking and simulation in monomer and
 This should be run from the covid-moonshot/scripts directory
 
 """
-from typing import Optional, List, Tuple, NamedTuple
+from typing import Optional, List, Tuple, NamedTuple, Union
 import re
 import os
 from pathlib import Path
@@ -21,7 +21,7 @@ import numpy as np
 from openeye import oechem
 from zipfile import ZipFile
 
-from .constants import BIOLOGICAL_SYMMETRY_HEADER, SEQRES, FRAGALYSIS_URL, MINIMUM_FRAGMENT_SIZE
+from .constants import BIOLOGICAL_SYMMETRY_HEADER, SEQRES, FRAGALYSIS_URL, MINIMUM_FRAGMENT_SIZE, CHAIN_PDB_INDEX
 
 
 # structures_path = '../Mpro_tests'
@@ -36,13 +36,13 @@ class DockingSystem(NamedTuple):
 class PreparationConfig(NamedTuple):
     input: Path
     output: Path
-    is_dimer: bool
+    create_dimer: bool
     retain_water: Optional[bool] = False
 
     def __str__(self):
         msg = f"\n{str(self.input.absolute())}" \
               f"\n{str(self.output.absolute())}" \
-              f"\n{str(self.is_dimer)}" \
+              f"\n{str(self.create_dimer)}" \
               f"\n{str(self.retain_water)}"
         return msg
 
@@ -120,6 +120,11 @@ def lines_to_mol_graph(lines: List[str]) -> oechem.OEGraphMol:
     return complex
 
 
+def get_chain_labels_pdb(pdb_path: Path) -> List[str]:
+    pdb_lines = pdb_path.open('rt').readlines()
+    return list(set([x[CHAIN_PDB_INDEX] for x in pdb_lines if x.startswith('ATOM')]))
+
+
 def create_molecular_graph(config: PreparationConfig) -> oechem.OEGraphMol:
     with config.input.open() as f:
         pdbfile_lines = f.readlines()
@@ -129,7 +134,7 @@ def create_molecular_graph(config: PreparationConfig) -> oechem.OEGraphMol:
     if is_diamond_structure(config.input) and (not is_in_lines(pdbfile_lines, 'REMARK 350')):
         pdbfile_lines = add_prefix(pdbfile_lines, BIOLOGICAL_SYMMETRY_HEADER)
 
-    if not config.is_dimer:
+    if not config.create_dimer:
         pdbfile_lines = remove_from_lines(pdbfile_lines, 'REMARK 350')
 
     if not config.retain_water:
@@ -140,7 +145,9 @@ def create_molecular_graph(config: PreparationConfig) -> oechem.OEGraphMol:
     if not is_in_lines(pdbfile_lines, 'SEQRES'):
         pdbfile_lines = add_prefix(pdbfile_lines, SEQRES)
 
-    return lines_to_mol_graph(pdbfile_lines)
+    graph = lines_to_mol_graph(pdbfile_lines)
+
+    return graph
 
 
 def strip_hydrogens(complex: oechem.OEGraphMol) -> oechem.OEGraphMol:
@@ -240,13 +247,13 @@ def make_docking_system(design_unit: oechem.OEDesignUnit) -> DockingSystem:
 
 def write_receptor(receptor: oechem.OEGraphMol, paths: List[Path]) -> None:
     for path in paths:
-        oedocking.OEWriteReceptorFile(receptor, str(path))
+        oedocking.OEWriteReceptorFile(oechem.OEGraphMol(receptor), str(path))
 
 
 def write_protein(protein: oechem.OEGraphMol, paths: List[Path]) -> None:
     for path in paths:
         with oechem.oemolostream(str(path)) as ofs:
-            oechem.OEWriteMolecule(ofs, protein)
+            oechem.OEWriteMolecule(ofs, oechem.OEGraphMol(protein))
 
         with path.open(mode='rt') as f:
             pdbfile_lines = f.readlines()
@@ -260,7 +267,7 @@ def write_protein(protein: oechem.OEGraphMol, paths: List[Path]) -> None:
 def write_molecular_graph(molecule: oechem.OEGraphMol, paths: List[Path]) -> None:
     for path in paths:
         with oechem.oemolostream(str(path)) as ofs:
-            oechem.OEWriteMolecule(ofs, molecule)
+            oechem.OEWriteMolecule(ofs, oechem.OEGraphMol(molecule))
 
 
 def write_docking_system(docking_system: DockingSystem, filenames: OutputPaths,
@@ -274,9 +281,8 @@ def write_docking_system(docking_system: DockingSystem, filenames: OutputPaths,
 
     write_receptor(receptor=docking_system.receptor, paths=[receptor_path])
     write_protein(protein=docking_system.protein, paths=[protein_path])
-    write_molecular_graph(molecule=docking_system.ligand, paths=[filenames.ligand_sdf,
-                                                                 filenames.ligand_pdb,
-                                                                 filenames.ligand_mol2])
+    paths = [filenames.ligand_mol2, filenames.ligand_pdb, filenames.ligand_sdf]
+    write_molecular_graph(molecule=docking_system.ligand, paths=paths)
 
 
 def prepare_receptor(config: PreparationConfig) -> None:
@@ -303,7 +309,10 @@ def prepare_receptor(config: PreparationConfig) -> None:
     design_units = make_design_units(complex, mdata, opts)
     design_unit = design_units[0]
 
+    receptor_filename = str(output_filenames.receptor_gzipped)
+    prefix = output_filenames.receptor_gzipped.parent.joinpath(config.input.stem)
     docking_sytem = make_docking_system(design_unit)
+
     write_docking_system(docking_sytem, output_filenames, is_thiolate=False)
 
     protonate_opts = opts.GetPrepOptions().GetProtonateOptions()

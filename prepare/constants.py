@@ -52,3 +52,7 @@ SEQRES  24 A  306  CYS SER GLY VAL THR PHE GLN
 """
 
 FRAGALYSIS_URL='https://fragalysis.diamond.ac.uk/media/targets/Mpro.zip'
+
+CHAIN_PDB_INDEX = 21
+
+MINIMUM_FRAGMENT_SIZE = 7

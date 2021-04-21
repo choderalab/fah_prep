@@ -1,4 +1,4 @@
-COMPND    (A)altA
+COMPND    (A)
 ATOM      1  N   ARG A   4       0.106   5.534  -7.849  1.00 38.79           N
 ANISOU    1  N   ARG A   4     3742   6437   4558   -663     66     30       N
 ATOM      2  CA  ARG A   4      -0.192   5.060  -6.499  1.00 39.07           C
