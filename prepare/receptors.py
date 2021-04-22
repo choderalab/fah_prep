@@ -125,7 +125,7 @@ def get_chain_labels_pdb(pdb_path: Path) -> List[str]:
     return list(set([x[CHAIN_PDB_INDEX] for x in pdb_lines if x.startswith('ATOM')]))
 
 
-def create_molecular_graph(config: PreparationConfig) -> oechem.OEGraphMol:
+def clean_pdb(config: PreparationConfig) -> List[str]:
     with config.input.open() as f:
         pdbfile_lines = f.readlines()
 
@@ -145,9 +145,9 @@ def create_molecular_graph(config: PreparationConfig) -> oechem.OEGraphMol:
     if not is_in_lines(pdbfile_lines, 'SEQRES'):
         pdbfile_lines = add_prefix(pdbfile_lines, SEQRES)
 
-    graph = lines_to_mol_graph(pdbfile_lines)
+    return pdbfile_lines
 
-    return graph
+
 
 
 def strip_hydrogens(complex: oechem.OEGraphMol) -> oechem.OEGraphMol:
@@ -247,27 +247,30 @@ def make_docking_system(design_unit: oechem.OEDesignUnit) -> DockingSystem:
 
 def write_receptor(receptor: oechem.OEGraphMol, paths: List[Path]) -> None:
     for path in paths:
-        oedocking.OEWriteReceptorFile(oechem.OEGraphMol(receptor), str(path))
+        if not path.exists():
+            oedocking.OEWriteReceptorFile(oechem.OEGraphMol(receptor), str(path))
 
 
 def write_protein(protein: oechem.OEGraphMol, paths: List[Path]) -> None:
     for path in paths:
-        with oechem.oemolostream(str(path)) as ofs:
-            oechem.OEWriteMolecule(ofs, oechem.OEGraphMol(protein))
+        if not path.exists():
+            with oechem.oemolostream(str(path)) as ofs:
+                oechem.OEWriteMolecule(ofs, oechem.OEGraphMol(protein))
 
-        with path.open(mode='rt') as f:
-            pdbfile_lines = f.readlines()
+            with path.open(mode='rt') as f:
+                pdbfile_lines = f.readlines()
 
-        pdbfile_lines = remove_from_lines(pdbfile_lines, 'UNK')
+            pdbfile_lines = remove_from_lines(pdbfile_lines, 'UNK')
 
-        with path.open(mode='wt') as outfile:
-            outfile.write(''.join(pdbfile_lines))
+            with path.open(mode='wt') as outfile:
+                outfile.write(''.join(pdbfile_lines))
 
 
 def write_molecular_graph(molecule: oechem.OEGraphMol, paths: List[Path]) -> None:
     for path in paths:
-        with oechem.oemolostream(str(path)) as ofs:
-            oechem.OEWriteMolecule(ofs, oechem.OEGraphMol(molecule))
+        if not path.exists():
+            with oechem.oemolostream(str(path)) as ofs:
+                oechem.OEWriteMolecule(ofs, oechem.OEGraphMol(molecule))
 
 
 def write_docking_system(docking_system: DockingSystem, filenames: OutputPaths,
@@ -285,13 +288,49 @@ def write_docking_system(docking_system: DockingSystem, filenames: OutputPaths,
     write_molecular_graph(molecule=docking_system.ligand, paths=paths)
 
 
+def change_protonation(molecule: oechem.OEGraphMol, options: oechem.OEPlaceHydrogensOptions,
+                       match_strings: List[str], atom_name: int, formal_charge: int, implicit_h_count: int) -> \
+        Tuple[oechem.OEGraphMol, oechem.OEPlaceHydrogensOptions]:
+    pred = oechem.OEAtomMatchResidue(match_strings)
+    options.SetBypassPredicate(pred)
+    for atom in molecule.GetAtoms(pred):
+        if oechem.OEGetPDBAtomIndex(atom) == atom_name:
+            oechem.OESuppressHydrogens(atom)
+            atom.SetFormalCharge(formal_charge)
+            atom.SetImplicitHCount(implicit_h_count)
+    return molecule, options
+
+
+def create_thiolate(docking_system: DockingSystem, design_unit: oechem.OEDesignUnit,
+                    options: oespruce.OEMakeDesignUnitOptions) -> oechem.OEDesignUnit:
+
+
+    protonate_opts = options.GetPrepOptions().GetProtonateOptions()
+    place_h_opts = protonate_opts.GetPlaceHydrogensOptions()
+    protein = docking_system.protein
+
+    protein, place_h_opts = change_protonation(molecule=protein, options=place_h_opts,
+                                               match_strings=["CYS:145:.*:.*:.*"], atom_name=oechem.OEPDBAtomName_SG,
+                                               formal_charge=-1, implicit_h_count=0)
+
+    protein, place_h_opts = change_protonation(molecule=protein, options=place_h_opts,
+                                               match_strings=["HIS:41:.*:.*:.*"], atom_name=oechem.OEPDBAtomName_ND1,
+                                               formal_charge=+1, implicit_h_count=1)
+
+    oechem.OEUpdateDesignUnit(design_unit, protein, oechem.OEDesignUnitComponents_Protein)
+    oespruce.OEProtonateDesignUnit(design_unit, protonate_opts)
+    design_unit.GetProtein(protein)
+    return design_unit
+
+
 def prepare_receptor(config: PreparationConfig) -> None:
     output_filenames = create_output_filenames(config)
 
     if already_prepared(output_filenames):
         return
 
-    complex = create_molecular_graph(config)
+    pdb_lines = clean_pdb(config)
+    complex = lines_to_mol_graph(pdb_lines)
     complex = strip_hydrogens(complex)
     complex = rebuild_c_terminal(complex)
 
@@ -301,75 +340,20 @@ def prepare_receptor(config: PreparationConfig) -> None:
     oechem.OEThrow.Clear()
     oechem.OEThrow.SetLevel(oechem.OEErrorLevel_Verbose) # capture verbose error output
 
-    opts = set_options()
-    opts = prevent_flip(opts, match_strings=["GLN:189:.*:.*:.*"])
+    options = set_options()
+    options = prevent_flip(options, match_strings=["GLN:189:.*:.*:.*"])
+    metadata = oespruce.OEStructureMetadata()
 
-    mdata = oespruce.OEStructureMetadata()
-
-    design_units = make_design_units(complex, mdata, opts)
-    design_unit = design_units[0]
-
-    receptor_filename = str(output_filenames.receptor_gzipped)
-    prefix = output_filenames.receptor_gzipped.parent.joinpath(config.input.stem)
+    # Neutral dyad
+    design_unit = make_design_units(complex, metadata, options)[0]
     docking_sytem = make_docking_system(design_unit)
-
     write_docking_system(docking_sytem, output_filenames, is_thiolate=False)
 
-    protonate_opts = opts.GetPrepOptions().GetProtonateOptions()
-    place_hydrogens_opts = protonate_opts.GetPlaceHydrogensOptions()
-    protein = docking_sytem.protein
-    ligand = docking_sytem.ligand
+    # Charge separated dyad
+    design_unit = create_thiolate(docking_sytem, design_unit, options)
+    docking_system = make_docking_system(design_unit)
+    write_docking_system(docking_system, output_filenames, is_thiolate=True)
 
-    # Adjust protonation state of CYS145 to generate thiolate form
-    #print('Deprotonating CYS145...') # DEBUG
-    #pred = oechem.OEAtomMatchResidue(["CYS:145: :A"])
-    pred = oechem.OEAtomMatchResidue(["CYS:145:.*:.*:.*"])
-    place_hydrogens_opts.SetBypassPredicate(pred)
-    for atom in protein.GetAtoms(pred):
-        if oechem.OEGetPDBAtomIndex(atom) == oechem.OEPDBAtomName_SG:
-            #print('Modifying CYS 145 SG')
-            oechem.OESuppressHydrogens(atom)
-            atom.SetFormalCharge(-1)
-            atom.SetImplicitHCount(0)
-    #print('Protonating HIS41...') # DEBUG
-    #pred = oechem.OEAtomMatchResidue(["HIS:41: :A"])
-    pred = oechem.OEAtomMatchResidue(["HIS:41:.*:.*:.*"])
-    place_hydrogens_opts.SetBypassPredicate(pred)
-    for atom in protein.GetAtoms(pred):
-        if oechem.OEGetPDBAtomIndex(atom) == oechem.OEPDBAtomName_ND1:
-            #print('Protonating HIS 41 ND1')
-            oechem.OESuppressHydrogens(atom) # strip hydrogens from residue
-            atom.SetFormalCharge(+1)
-            atom.SetImplicitHCount(1)
-    # Update the design unit with the modified formal charge for CYS 145 SG
-    oechem.OEUpdateDesignUnit(design_unit, protein, oechem.OEDesignUnitComponents_Protein)
-
-    # Don't flip Gln189
-    #pred = oechem.OEAtomMatchResidue(["GLN:189: :A"])
-    #protonate_opts = opts.GetPrepOptions().GetProtonateOptions();
-    #place_hydrogens_opts = protonate_opts.GetPlaceHydrogensOptions()
-    #place_hydrogens_opts.SetNoFlipPredicate(pred)
-
-    # Adjust protonation states
-    #print('Re-optimizing hydrogen positions...') # DEBUG
-    #place_hydrogens_opts = oechem.OEPlaceHydrogensOptions()
-    #place_hydrogens_opts.SetBypassPredicate(pred)
-    #protonate_opts = oespruce.OEProtonateDesignUnitOptions(place_hydrogens_opts)
-    success = oespruce.OEProtonateDesignUnit(design_unit, protonate_opts)
-    design_unit.GetProtein(protein)
-
-    # Write thiolate form of receptor
-    receptor = oechem.OEGraphMol()
-    oedocking.OEMakeReceptor(receptor, protein, ligand)
-    oedocking.OEWriteReceptorFile(receptor, str(output_filenames.receptor_thiolate_gzipped))
-
-    with oechem.oemolostream(str(output_filenames.protein_thiolate_pdb)) as ofs:
-        oechem.OEWriteMolecule(ofs, protein)
-
-    # Filter out UNK from PDB files (which have covalent adducts)
-    pdbfile_lines = [ line for line in output_filenames.protein_thiolate_pdb.open(mode='r') if 'UNK' not in line ]
-    with output_filenames.protein_thiolate_pdb.open(mode='wt') as outfile:
-        outfile.write(''.join(pdbfile_lines))
 
 
 def download_fragalysis_latest(structures_path: Path) -> None:
