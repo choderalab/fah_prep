@@ -122,7 +122,12 @@ def lines_to_mol_graph(lines: List[str]) -> oechem.OEGraphMol:
 
 def get_chain_labels_pdb(pdb_path: Path) -> List[str]:
     pdb_lines = pdb_path.open('rt').readlines()
-    return list(set([x[CHAIN_PDB_INDEX] for x in pdb_lines if x.startswith('ATOM')]))
+    return list(set([x[CHAIN_PDB_INDEX].lower() for x in pdb_lines if x.startswith('ATOM')]))
+
+
+def au_is_dimeric(pdb_path: Path) -> bool:
+    labels = get_chain_labels_pdb(pdb_path)
+    return ('a' in labels) and ('b' in labels)
 
 
 def clean_pdb(config: PreparationConfig) -> List[str]:
@@ -148,11 +153,7 @@ def clean_pdb(config: PreparationConfig) -> List[str]:
     return pdbfile_lines
 
 
-
-
 def strip_hydrogens(complex: oechem.OEGraphMol) -> oechem.OEGraphMol:
-    # Strip protons from structure to allow SpruceTK to add these back
-    # See: 6wnp, 6wtj, 6wtk, 6xb2, 6xqs, 6xqt, 6xqu, 6m2n
     for atom in complex.GetAtoms():
         if atom.GetAtomicNum() > 1:
             oechem.OESuppressHydrogens(atom)
@@ -209,6 +210,9 @@ def set_options() -> oespruce.OEMakeDesignUnitOptions:
 
     opts.GetPrepOptions().GetBuildOptions().GetCapBuilderOptions().SetAllowTruncate(False)
 
+    # Prophylactic measure by JDC - not sure whether this is actually needed.
+    opts = prevent_flip(opts, match_strings=["GLN:189:.*:.*:.*"])
+
     return opts
 
 
@@ -216,7 +220,6 @@ def prevent_flip(options: oespruce.OEMakeDesignUnitOptions, match_strings: List[
     pred = oechem.OEAtomMatchResidue(match_strings)
     protonate_opts = options.GetPrepOptions().GetProtonateOptions()
     place_hydrogens_opts = protonate_opts.GetPlaceHydrogensOptions()
-    # place_hydrogens_opts.SetBypassPredicate(pred)
     place_hydrogens_opts.SetNoFlipPredicate(pred)
     return options
 
@@ -304,7 +307,6 @@ def change_protonation(molecule: oechem.OEGraphMol, options: oechem.OEPlaceHydro
 def create_thiolate(docking_system: DockingSystem, design_unit: oechem.OEDesignUnit,
                     options: oespruce.OEMakeDesignUnitOptions) -> oechem.OEDesignUnit:
 
-
     protonate_opts = options.GetPrepOptions().GetProtonateOptions()
     place_h_opts = protonate_opts.GetPlaceHydrogensOptions()
     protein = docking_system.protein
@@ -326,11 +328,16 @@ def create_thiolate(docking_system: DockingSystem, design_unit: oechem.OEDesignU
 def prepare_receptor(config: PreparationConfig) -> None:
     output_filenames = create_output_filenames(config)
 
+    if au_is_dimeric(config.input) and (not config.create_dimer):
+        return
+
     if already_prepared(output_filenames):
         return
 
     pdb_lines = clean_pdb(config)
     complex = lines_to_mol_graph(pdb_lines)
+
+    # Some prophylatic measures by JDC - may be redundant in new OE versions
     complex = strip_hydrogens(complex)
     complex = rebuild_c_terminal(complex)
 
@@ -340,8 +347,8 @@ def prepare_receptor(config: PreparationConfig) -> None:
     oechem.OEThrow.Clear()
     oechem.OEThrow.SetLevel(oechem.OEErrorLevel_Verbose) # capture verbose error output
 
+    # Setup options
     options = set_options()
-    options = prevent_flip(options, match_strings=["GLN:189:.*:.*:.*"])
     metadata = oespruce.OEStructureMetadata()
 
     # Neutral dyad
@@ -353,7 +360,6 @@ def prepare_receptor(config: PreparationConfig) -> None:
     design_unit = create_thiolate(docking_sytem, design_unit, options)
     docking_system = make_docking_system(design_unit)
     write_docking_system(docking_system, output_filenames, is_thiolate=True)
-
 
 
 def download_fragalysis_latest(structures_path: Path) -> None:
@@ -380,7 +386,7 @@ def define_prep_configs(args: argparse.Namespace) -> List[PreparationConfig]:
     input_paths = get_structures(args)
     output_paths = [args.output_directory.joinpath(subdir) for subdir in ['monomer', 'dimer']]
     products = list(itertools.product(input_paths, output_paths))
-    configs = [PreparationConfig(input=x, output=y, is_dimer=y.stem == 'dimer') for x, y in
+    configs = [PreparationConfig(input=x, output=y, create_dimer=y.stem == 'dimer') for x, y in
                products]
     return configs
 
