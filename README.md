@@ -10,17 +10,22 @@ python prepare/receptors.py -i path/to/structures -f 'Mpro-P0047*.pdb' -o ./rece
 * `-f` glob filter for files
 * `-o` output directory (doesn't need to exist)
 
+If the structure is a monomer, then it will create a dimer form and a monomer form. 
+If the structure is a dimer, it will only produce a dimer form.
+
+A log file is created for structure and dimer/monomer form. 
+
 **Known bugs**:
 
-Doen't produce catalytic dyad (thiolate form)
+Cannot control the protonation of the catalytic dyad.  
 
 **To-do**: 
+
 * parallelisation
 * fix thiolate bug
 * covert into command line tool
-* add logger
 * more flexible Spruce options (currently hard-coded)
-* change testu
+* change tests to reflect accurate dyads.
 
 
 

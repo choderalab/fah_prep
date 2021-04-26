@@ -360,10 +360,11 @@ def prepare_receptor(config: PreparationConfig) -> None:
     complex = rebuild_c_terminal(complex)
 
     # Log warnings
-    errfs = oechem.oeosstream() # create a stream that writes internally to a stream
+    fname = output_filenames.protein_pdb.parent.joinpath(f"{output_filenames.protein_pdb.stem}.log")
+    errfs = oechem.oeofstream(str(fname)) # create a stream that writes internally to a stream
     oechem.OEThrow.SetOutputStream(errfs)
     oechem.OEThrow.Clear()
-    oechem.OEThrow.SetLevel(oechem.OEErrorLevel_Verbose) # capture verbose error output
+    oechem.OEThrow.SetLevel(oechem.OEErrorLevel_Debug) # capture verbose error output
 
     # Setup options
     print('setting options...')
@@ -393,7 +394,7 @@ def prepare_receptor(config: PreparationConfig) -> None:
     # docking_system = make_docking_system(design_unit)
     # print('\t writing docking system...')
     # write_docking_system(docking_system, output_filenames, is_thiolate=True)
-
+    errfs.close()
 
 def download_fragalysis_latest(structures_path: Path) -> None:
     zip_path = structures_path.joinpath('Mpro.zip')
