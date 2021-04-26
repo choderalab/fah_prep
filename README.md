@@ -10,6 +10,8 @@ python prepare/receptors.py -i path/to/structures -f 'Mpro-P0047*.pdb' -o ./rece
 * `-f` glob filter for files
 * `-o` output directory (doesn't need to exist)
 
+Does not overwrite existing files!
+
 **Known bugs**:
 
 Doen't produce catalytic dyad (thiolate form)

@@ -248,30 +248,30 @@ def make_docking_system(design_unit: oechem.OEDesignUnit) -> DockingSystem:
 
 def write_receptor(receptor: oechem.OEGraphMol, paths: List[Path]) -> None:
     for path in paths:
-        if not path.exists():
-            oedocking.OEWriteReceptorFile(oechem.OEGraphMol(receptor), str(path))
+        # if not path.exists():
+        oedocking.OEWriteReceptorFile(oechem.OEGraphMol(receptor), str(path))
 
 
 def write_protein(protein: oechem.OEGraphMol, paths: List[Path]) -> None:
     for path in paths:
-        if not path.exists():
-            with oechem.oemolostream(str(path)) as ofs:
-                oechem.OEWriteMolecule(ofs, oechem.OEGraphMol(protein))
+        # if not path.exists():
+        with oechem.oemolostream(str(path)) as ofs:
+            oechem.OEWriteMolecule(ofs, oechem.OEGraphMol(protein))
 
-            with path.open(mode='rt') as f:
-                pdbfile_lines = f.readlines()
+        with path.open(mode='rt') as f:
+            pdbfile_lines = f.readlines()
 
-            pdbfile_lines = remove_from_lines(pdbfile_lines, 'UNK')
+        pdbfile_lines = remove_from_lines(pdbfile_lines, 'UNK')
 
-            with path.open(mode='wt') as outfile:
-                outfile.write(''.join(pdbfile_lines))
+        with path.open(mode='wt') as outfile:
+            outfile.write(''.join(pdbfile_lines))
 
 
 def write_molecular_graph(molecule: oechem.OEGraphMol, paths: List[Path]) -> None:
     for path in paths:
-        if not path.exists():
-            with oechem.oemolostream(str(path)) as ofs:
-                oechem.OEWriteMolecule(ofs, oechem.OEGraphMol(molecule))
+        # if not path.exists():
+        with oechem.oemolostream(str(path)) as ofs:
+            oechem.OEWriteMolecule(ofs, oechem.OEGraphMol(molecule))
 
 
 def write_docking_system(docking_system: DockingSystem, filenames: OutputPaths,
@@ -321,15 +321,16 @@ def create_dyad(state: str, docking_system: DockingSystem, design_unit: oechem.O
                                                    match_strings=["HIS:41:.*:.*:.*"], atom_name=oechem.OEPDBAtomName_NE1,
                                                    formal_charge=0, implicit_h_count=1)
     elif state == 'His41(0) Cys145(0)':
-        protein, place_h_opts = change_protonation(molecule=protein, options=place_h_opts,
-                                                   match_strings=["CYS:145:.*:.*:.*"], atom_name=oechem.OEPDBAtomName_SG,
-                                                   formal_charge=0, implicit_h_count=1)
+        pass
+        # protein, place_h_opts = change_protonation(molecule=protein, options=place_h_opts,
+        #                                            match_strings=["CYS:145:.*:.*:.*"], atom_name=oechem.OEPDBAtomName_SG,
+        #                                            formal_charge=0, implicit_h_count=1)
         protein, place_h_opts = change_protonation(molecule=protein, options=place_h_opts,
                                                    match_strings=["HIS:41:.*:.*:.*"], atom_name=oechem.OEPDBAtomName_ND1,
                                                    formal_charge=0, implicit_h_count=0)
-        protein, place_h_opts = change_protonation(molecule=protein, options=place_h_opts,
-                                                   match_strings=["HIS:41:.*:.*:.*"], atom_name=oechem.OEPDBAtomName_NE1,
-                                                   formal_charge=0, implicit_h_count=1)
+        # protein, place_h_opts = change_protonation(molecule=protein, options=place_h_opts,
+        #                                            match_strings=["HIS:41:.*:.*:.*"], atom_name=oechem.OEPDBAtomName_NE1,
+        #                                            formal_charge=0, implicit_h_count=1)
     else:
         ValueError("dyad_state must be one of ['His41(0) Cys145(0)', 'His41(+) Cys145(-)']")
 
