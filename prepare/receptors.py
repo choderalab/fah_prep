@@ -6,22 +6,19 @@ This should be run from the covid-moonshot/scripts directory
 """
 from typing import Optional, List, Tuple, NamedTuple, Union
 import re
-import os
 from pathlib import Path
 import argparse
 import glob
 import itertools
 import tempfile
 
-import rich
-import openeye
 from openeye import oespruce
 from openeye import oedocking
 import numpy as np
 from openeye import oechem
 from zipfile import ZipFile
 
-from .constants import BIOLOGICAL_SYMMETRY_HEADER, SEQRES, FRAGALYSIS_URL, MINIMUM_FRAGMENT_SIZE, CHAIN_PDB_INDEX
+from prepare.constants import BIOLOGICAL_SYMMETRY_HEADER, SEQRES_DIMER, SEQRES_MONOMER, FRAGALYSIS_URL, MINIMUM_FRAGMENT_SIZE, CHAIN_PDB_INDEX
 
 
 # structures_path = '../Mpro_tests'
@@ -78,7 +75,6 @@ def download_url(url, save_path, chunk_size=128):
 def read_pdb_file(pdb_file):
     #print(f'Reading receptor from {pdb_file}...')
 
-    from openeye import oechem
     ifs = oechem.oemolistream()
     ifs.SetFlavor(oechem.OEFormat_PDB, oechem.OEIFlavor_PDB_Default | oechem.OEIFlavor_PDB_DATA | oechem.OEIFlavor_PDB_ALTLOC)  # noqa
 
@@ -90,7 +86,7 @@ def read_pdb_file(pdb_file):
         oechem.OEThrow.Fatal("Unable to read molecule from %s." % pdb_file)
     ifs.close()
 
-    return (mol)
+    return mol
 
 
 def is_diamond_structure(pdb_path: Path) -> bool:
@@ -134,8 +130,6 @@ def clean_pdb(config: PreparationConfig) -> List[str]:
     with config.input.open() as f:
         pdbfile_lines = f.readlines()
 
-    pdbfile_lines = remove_from_lines(pdbfile_lines, 'UNK')
-
     if is_diamond_structure(config.input) and (not is_in_lines(pdbfile_lines, 'REMARK 350')):
         pdbfile_lines = add_prefix(pdbfile_lines, BIOLOGICAL_SYMMETRY_HEADER)
 
@@ -146,9 +140,13 @@ def clean_pdb(config: PreparationConfig) -> List[str]:
         pdbfile_lines = remove_from_lines(pdbfile_lines, 'HOH')
 
     pdbfile_lines = remove_from_lines(pdbfile_lines, 'LINK')
+    pdbfile_lines = remove_from_lines(pdbfile_lines, 'UNK')
 
     if not is_in_lines(pdbfile_lines, 'SEQRES'):
-        pdbfile_lines = add_prefix(pdbfile_lines, SEQRES)
+        if au_is_dimeric(config.input):
+            pdbfile_lines = add_prefix(pdbfile_lines, SEQRES_DIMER)
+        else:
+            pdbfile_lines = add_prefix(pdbfile_lines, SEQRES_MONOMER)
 
     return pdbfile_lines
 
@@ -298,30 +296,45 @@ def change_protonation(molecule: oechem.OEGraphMol, options: oechem.OEPlaceHydro
     options.SetBypassPredicate(pred)
     for atom in molecule.GetAtoms(pred):
         if oechem.OEGetPDBAtomIndex(atom) == atom_name:
+            print(f'\t ...changing protonation on {atom}')
             oechem.OESuppressHydrogens(atom)
-            atom.SetFormalCharge(formal_charge)
             atom.SetImplicitHCount(implicit_h_count)
+            atom.SetFormalCharge(formal_charge)
     return molecule, options
 
 
-def create_thiolate(docking_system: DockingSystem, design_unit: oechem.OEDesignUnit,
+def create_dyad(state: str, docking_system: DockingSystem, design_unit: oechem.OEDesignUnit,
                     options: oespruce.OEMakeDesignUnitOptions) -> oechem.OEDesignUnit:
 
     protonate_opts = options.GetPrepOptions().GetProtonateOptions()
     place_h_opts = protonate_opts.GetPlaceHydrogensOptions()
     protein = docking_system.protein
 
-    protein, place_h_opts = change_protonation(molecule=protein, options=place_h_opts,
-                                               match_strings=["CYS:145:.*:.*:.*"], atom_name=oechem.OEPDBAtomName_SG,
-                                               formal_charge=-1, implicit_h_count=0)
-
-    protein, place_h_opts = change_protonation(molecule=protein, options=place_h_opts,
-                                               match_strings=["HIS:41:.*:.*:.*"], atom_name=oechem.OEPDBAtomName_ND1,
-                                               formal_charge=+1, implicit_h_count=1)
+    if state == 'His41(+) Cys145(-1)':
+        protein, place_h_opts = change_protonation(molecule=protein, options=place_h_opts,
+                                                   match_strings=["CYS:145:.*:.*:.*"], atom_name=oechem.OEPDBAtomName_SG,
+                                                   formal_charge=-1, implicit_h_count=0)
+        protein, place_h_opts = change_protonation(molecule=protein, options=place_h_opts,
+                                                   match_strings=["HIS:41:.*:.*:.*"], atom_name=oechem.OEPDBAtomName_ND1,
+                                                   formal_charge=+1, implicit_h_count=1)
+        protein, place_h_opts = change_protonation(molecule=protein, options=place_h_opts,
+                                                   match_strings=["HIS:41:.*:.*:.*"], atom_name=oechem.OEPDBAtomName_NE1,
+                                                   formal_charge=0, implicit_h_count=1)
+    elif state == 'His41(0) Cys145(0)':
+        protein, place_h_opts = change_protonation(molecule=protein, options=place_h_opts,
+                                                   match_strings=["CYS:145:.*:.*:.*"], atom_name=oechem.OEPDBAtomName_SG,
+                                                   formal_charge=0, implicit_h_count=1)
+        protein, place_h_opts = change_protonation(molecule=protein, options=place_h_opts,
+                                                   match_strings=["HIS:41:.*:.*:.*"], atom_name=oechem.OEPDBAtomName_ND1,
+                                                   formal_charge=0, implicit_h_count=0)
+        protein, place_h_opts = change_protonation(molecule=protein, options=place_h_opts,
+                                                   match_strings=["HIS:41:.*:.*:.*"], atom_name=oechem.OEPDBAtomName_NE1,
+                                                   formal_charge=0, implicit_h_count=1)
+    else:
+        ValueError("dyad_state must be one of ['His41(0) Cys145(0)', 'His41(+) Cys145(-)']")
 
     oechem.OEUpdateDesignUnit(design_unit, protein, oechem.OEDesignUnitComponents_Protein)
     oespruce.OEProtonateDesignUnit(design_unit, protonate_opts)
-    design_unit.GetProtein(protein)
     return design_unit
 
 
@@ -334,11 +347,15 @@ def prepare_receptor(config: PreparationConfig) -> None:
     if already_prepared(output_filenames):
         return
 
+    print('cleaning pdb...')
     pdb_lines = clean_pdb(config)
+    print('creating molecular graph...')
     complex = lines_to_mol_graph(pdb_lines)
 
     # Some prophylatic measures by JDC - may be redundant in new OE versions
+    print('stripping hydrogens...')
     complex = strip_hydrogens(complex)
+    print('rebuilding c terminal...')
     complex = rebuild_c_terminal(complex)
 
     # Log warnings
@@ -348,18 +365,33 @@ def prepare_receptor(config: PreparationConfig) -> None:
     oechem.OEThrow.SetLevel(oechem.OEErrorLevel_Verbose) # capture verbose error output
 
     # Setup options
+    print('setting options...')
     options = set_options()
+    print('creating metadata...')
     metadata = oespruce.OEStructureMetadata()
 
-    # Neutral dyad
+    print('making base design unit...')
     design_unit = make_design_units(complex, metadata, options)[0]
+    print('making base docking system...')
     docking_sytem = make_docking_system(design_unit)
+
+    # Neutral dyad
+    print('making neutral dyad...')
+    print('\t updating design unit...')
+    design_unit = create_dyad('His41(0) Cys145(0)', docking_sytem, design_unit, options)
+    print('\t updating docking system...')
+    docking_sytem = make_docking_system(design_unit)
+    print('\t writing docking system...')
     write_docking_system(docking_sytem, output_filenames, is_thiolate=False)
 
-    # Charge separated dyad
-    design_unit = create_thiolate(docking_sytem, design_unit, options)
-    docking_system = make_docking_system(design_unit)
-    write_docking_system(docking_system, output_filenames, is_thiolate=True)
+    # # Charge separated dyad
+    # print('making catalytic dyad...')
+    # print('\t updating design unit...')
+    # design_unit = create_dyad('His41(+) Cys145(-1)', docking_sytem, design_unit, options)
+    # print('\t updating docking system...')
+    # docking_system = make_docking_system(design_unit)
+    # print('\t writing docking system...')
+    # write_docking_system(docking_system, output_filenames, is_thiolate=True)
 
 
 def download_fragalysis_latest(structures_path: Path) -> None:
@@ -378,7 +410,8 @@ def get_structures(args: argparse.Namespace) -> List[Path]:
     if len(source_pdb_files) == 0:
         raise RuntimeError(f'Glob path {args.structures_directory.joinpath(args.structures_filter)} '
                            f'has matched 0 files.')
-
+    #TODO - make logger
+    [print(x) for x in source_pdb_files]
     return source_pdb_files
 
 
@@ -391,24 +424,32 @@ def define_prep_configs(args: argparse.Namespace) -> List[PreparationConfig]:
     return configs
 
 
+def create_output_directories(configs: List[PreparationConfig]) -> None:
+    for config in configs:
+        if config.output.exists():
+            pass
+        else:
+            config.output.mkdir(parents=True, exist_ok=True)
+
+
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='Prepare bound structures for free energy calculations.')
-    parser.add_argument('--structures_directory', type=Path,
+    parser.add_argument('-i', dest='structures_directory', type=Path,
                         help='Directory containing the protein/ligand bound PDB files.')
-    parser.add_argument('--structures_filter', type=str,
+    parser.add_argument('-f', dest='structures_filter', type=str,
                         default="aligned/Mpro-*_0?/Mpro-*_0?_bound.pdb",
-                        help='regex filter to find PDB files in structures_directory.')
-    parser.add_argument('--output_directory', type=Path,
+                        help='glob filter to find PDB files in structures_directory.')
+    parser.add_argument('-o', dest='output_directory', type=Path,
                         help='Directory to write prepared files.')
-    parser.add_argument('--dry_run', type=bool, default=False,
+    parser.add_argument('-n', dest='dry_run', type=bool, default=False,
                         help='Only input/output destinations are printed.')
     args = parser.parse_args()
 
     oechem.OEThrow.SetLevel(oechem.OEErrorLevel_Quiet)
 
     configs = define_prep_configs(args)
-
+    create_output_directories(configs)
     for config in configs:
         if args.dry_run:
             print(config)
