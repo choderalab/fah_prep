@@ -292,8 +292,8 @@ def write_docking_system(docking_system: DockingSystem, filenames: OutputPaths,
 def change_protonation(molecule: oechem.OEGraphMol, options: oechem.OEPlaceHydrogensOptions,
                        match_strings: List[str], atom_name: int, formal_charge: int, implicit_h_count: int) -> \
         Tuple[oechem.OEGraphMol, oechem.OEPlaceHydrogensOptions]:
+
     pred = oechem.OEAtomMatchResidue(match_strings)
-    options.SetBypassPredicate(pred)
     for atom in molecule.GetAtoms(pred):
         if oechem.OEGetPDBAtomIndex(atom) == atom_name:
             print(f'\t ...changing protonation on {atom}')
@@ -301,6 +301,12 @@ def change_protonation(molecule: oechem.OEGraphMol, options: oechem.OEPlaceHydro
             atom.SetImplicitHCount(implicit_h_count)
             atom.SetFormalCharge(formal_charge)
     return molecule, options
+
+
+def bypass_atoms(match_strings: List[str], options: oechem.OEPlaceHydrogensOptions) -> oechem.OEPlaceHydrogensOptions:
+    pred = oechem.OEAtomMatchResidue(match_strings)
+    options.SetBypassPredicate(pred)
+    return options
 
 
 def create_dyad(state: str, docking_system: DockingSystem, design_unit: oechem.OEDesignUnit,
@@ -318,22 +324,23 @@ def create_dyad(state: str, docking_system: DockingSystem, design_unit: oechem.O
                                                    match_strings=["HIS:41:.*:.*:.*"], atom_name=oechem.OEPDBAtomName_ND1,
                                                    formal_charge=+1, implicit_h_count=1)
         protein, place_h_opts = change_protonation(molecule=protein, options=place_h_opts,
-                                                   match_strings=["HIS:41:.*:.*:.*"], atom_name=oechem.OEPDBAtomName_NE1,
+                                                   match_strings=["HIS:41:.*:.*:.*"], atom_name=oechem.OEPDBAtomName_NE2,
                                                    formal_charge=0, implicit_h_count=1)
     elif state == 'His41(0) Cys145(0)':
-        pass
-        # protein, place_h_opts = change_protonation(molecule=protein, options=place_h_opts,
-        #                                            match_strings=["CYS:145:.*:.*:.*"], atom_name=oechem.OEPDBAtomName_SG,
-        #                                            formal_charge=0, implicit_h_count=1)
+        protein, place_h_opts = change_protonation(molecule=protein, options=place_h_opts,
+                                                   match_strings=["CYS:145:.*:.*:.*"], atom_name=oechem.OEPDBAtomName_SG,
+                                                   formal_charge=0, implicit_h_count=1)
         protein, place_h_opts = change_protonation(molecule=protein, options=place_h_opts,
                                                    match_strings=["HIS:41:.*:.*:.*"], atom_name=oechem.OEPDBAtomName_ND1,
                                                    formal_charge=0, implicit_h_count=0)
-        # protein, place_h_opts = change_protonation(molecule=protein, options=place_h_opts,
-        #                                            match_strings=["HIS:41:.*:.*:.*"], atom_name=oechem.OEPDBAtomName_NE1,
-        #                                            formal_charge=0, implicit_h_count=1)
+        protein, place_h_opts = change_protonation(molecule=protein, options=place_h_opts,
+                                                   match_strings=["HIS:41:.*:.*:.*"], atom_name=oechem.OEPDBAtomName_NE2,
+                                                   formal_charge=0, implicit_h_count=1)
     else:
         ValueError("dyad_state must be one of ['His41(0) Cys145(0)', 'His41(+) Cys145(-)']")
 
+    place_h_opts = bypass_atoms(["HIS:41:.*:.*:.*", "CYS:145:.*:.*:.*"], place_h_opts)
+    oechem.OEAddExplicitHydrogens(protein)
     oechem.OEUpdateDesignUnit(design_unit, protein, oechem.OEDesignUnitComponents_Protein)
     oespruce.OEProtonateDesignUnit(design_unit, protonate_opts)
     return design_unit
@@ -386,14 +393,14 @@ def prepare_receptor(config: PreparationConfig) -> None:
     print('\t writing docking system...')
     write_docking_system(docking_sytem, output_filenames, is_thiolate=False)
 
-    # # Charge separated dyad
-    # print('making catalytic dyad...')
-    # print('\t updating design unit...')
-    # design_unit = create_dyad('His41(+) Cys145(-1)', docking_sytem, design_unit, options)
-    # print('\t updating docking system...')
-    # docking_system = make_docking_system(design_unit)
-    # print('\t writing docking system...')
-    # write_docking_system(docking_system, output_filenames, is_thiolate=True)
+    # Charge separated dyad
+    print('making catalytic dyad...')
+    print('\t updating design unit...')
+    design_unit = create_dyad('His41(+) Cys145(-1)', docking_sytem, design_unit, options)
+    print('\t updating docking system...')
+    docking_system = make_docking_system(design_unit)
+    print('\t writing docking system...')
+    write_docking_system(docking_system, output_filenames, is_thiolate=True)
     errfs.close()
 
 def download_fragalysis_latest(structures_path: Path) -> None:
