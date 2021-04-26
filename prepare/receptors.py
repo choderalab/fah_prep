@@ -18,7 +18,8 @@ import numpy as np
 from openeye import oechem
 from zipfile import ZipFile
 
-from prepare.constants import BIOLOGICAL_SYMMETRY_HEADER, SEQRES_DIMER, SEQRES_MONOMER, FRAGALYSIS_URL, MINIMUM_FRAGMENT_SIZE, CHAIN_PDB_INDEX
+from prepare.constants import (BIOLOGICAL_SYMMETRY_HEADER, SEQRES_DIMER, SEQRES_MONOMER, FRAGALYSIS_URL,
+                               MINIMUM_FRAGMENT_SIZE, CHAIN_PDB_INDEX)
 
 
 # structures_path = '../Mpro_tests'
@@ -67,8 +68,9 @@ def download_url(url, save_path, chunk_size=128):
     import requests
     r = requests.get(url, stream=True)
     with open(save_path, 'wb') as fd:
-        nchunks = int(r.headers['Content-Length'])/chunk_size
-        for chunk in track(r.iter_content(chunk_size=chunk_size), 'Downloading ZIP archive of Mpro structures...', total=nchunks):
+        nchunks = int(int(r.headers['Content-Length'])/chunk_size)
+        for chunk in track(r.iter_content(chunk_size=chunk_size), 'Downloading ZIP archive of Mpro structures...',
+                           total=nchunks):
             fd.write(chunk)
 
 
@@ -208,7 +210,7 @@ def set_options() -> oespruce.OEMakeDesignUnitOptions:
 
     opts.GetPrepOptions().GetBuildOptions().GetCapBuilderOptions().SetAllowTruncate(False)
 
-    # Prophylactic measure by JDC - not sure whether this is actually needed.
+    # Premptive measure by JDC - not sure whether this is actually needed.
     opts = prevent_flip(opts, match_strings=["GLN:189:.*:.*:.*"])
 
     return opts
@@ -289,18 +291,13 @@ def write_docking_system(docking_system: DockingSystem, filenames: OutputPaths,
     write_molecular_graph(molecule=docking_system.ligand, paths=paths)
 
 
-def change_protonation(molecule: oechem.OEGraphMol, options: oechem.OEPlaceHydrogensOptions,
-                       match_strings: List[str], atom_name: int, formal_charge: int, implicit_h_count: int) -> \
-        Tuple[oechem.OEGraphMol, oechem.OEPlaceHydrogensOptions]:
-
-    pred = oechem.OEAtomMatchResidue(match_strings)
+def get_atoms(molecule: oechem.OEGraphMol, match_string: str, atom_name: str) -> List[oechem.OEAtomBase]:
+    atoms = []
+    pred = oechem.OEAtomMatchResidue(match_string)
     for atom in molecule.GetAtoms(pred):
-        if oechem.OEGetPDBAtomIndex(atom) == atom_name:
-            print(f'\t ...changing protonation on {atom}')
-            oechem.OESuppressHydrogens(atom)
-            atom.SetImplicitHCount(implicit_h_count)
-            atom.SetFormalCharge(formal_charge)
-    return molecule, options
+        if atom.GetName().strip() == atom_name:
+            atoms.append(atom)
+    return atoms
 
 
 def bypass_atoms(match_strings: List[str], options: oechem.OEPlaceHydrogensOptions) -> oechem.OEPlaceHydrogensOptions:
@@ -317,25 +314,49 @@ def create_dyad(state: str, docking_system: DockingSystem, design_unit: oechem.O
     protein = docking_system.protein
 
     if state == 'His41(+) Cys145(-1)':
-        protein, place_h_opts = change_protonation(molecule=protein, options=place_h_opts,
-                                                   match_strings=["CYS:145:.*:.*:.*"], atom_name=oechem.OEPDBAtomName_SG,
-                                                   formal_charge=-1, implicit_h_count=0)
-        protein, place_h_opts = change_protonation(molecule=protein, options=place_h_opts,
-                                                   match_strings=["HIS:41:.*:.*:.*"], atom_name=oechem.OEPDBAtomName_ND1,
-                                                   formal_charge=+1, implicit_h_count=1)
-        protein, place_h_opts = change_protonation(molecule=protein, options=place_h_opts,
-                                                   match_strings=["HIS:41:.*:.*:.*"], atom_name=oechem.OEPDBAtomName_NE2,
-                                                   formal_charge=0, implicit_h_count=1)
+        atoms = get_atoms(protein, "CYS:145:.*:.*:.*", "SG")
+        for atom in atoms:
+            if atom.GetExplicitHCount() == 1:
+                oechem.OESuppressHydrogens(atom)  # strip hydrogens from residue
+                atom.SetImplicitHCount(0)
+                atom.SetFormalCharge(-1)
+
+        atoms = get_atoms(protein, "HIS:41:.*:.*:.*", "ND1")
+        for atom in atoms:
+            if atom.GetExplicitHCount() == 0:
+                oechem.OESuppressHydrogens(atom)  # strip hydrogens from residue
+                atom.SetImplicitHCount(1)
+                atom.SetFormalCharge(+1)
+
+        atoms = get_atoms(protein, "HIS:41:.*:.*:.*", "NE2")
+        for atom in atoms:
+            if atom.GetExplicitHCount() == 0:
+                oechem.OESuppressHydrogens(atom)  # strip hydrogens from residue
+                atom.SetImplicitHCount(1)
+                atom.SetFormalCharge(+1)
+
     elif state == 'His41(0) Cys145(0)':
-        protein, place_h_opts = change_protonation(molecule=protein, options=place_h_opts,
-                                                   match_strings=["CYS:145:.*:.*:.*"], atom_name=oechem.OEPDBAtomName_SG,
-                                                   formal_charge=0, implicit_h_count=1)
-        protein, place_h_opts = change_protonation(molecule=protein, options=place_h_opts,
-                                                   match_strings=["HIS:41:.*:.*:.*"], atom_name=oechem.OEPDBAtomName_ND1,
-                                                   formal_charge=0, implicit_h_count=0)
-        protein, place_h_opts = change_protonation(molecule=protein, options=place_h_opts,
-                                                   match_strings=["HIS:41:.*:.*:.*"], atom_name=oechem.OEPDBAtomName_NE2,
-                                                   formal_charge=0, implicit_h_count=1)
+        atoms = get_atoms(protein, "CYS:145:.*:.*:.*", "SG")
+        for atom in atoms:
+            if atom.GetExplicitHCount() == 0:
+                oechem.OESuppressHydrogens(atom)  # strip hydrogens from residue
+                atom.SetImplicitHCount(1)
+                atom.SetFormalCharge(0)
+
+        atoms = get_atoms(protein, "HIS:41:.*:.*:.*", "ND1")
+        for atom in atoms:
+            if atom.GetFormalCharge() == 1:
+                oechem.OESuppressHydrogens(atom)  # strip hydrogens from residue
+                atom.SetImplicitHCount(0)
+                atom.SetFormalCharge(0)
+
+        atoms = get_atoms(protein, "HIS:41:.*:.*:.*", "NE2")
+        for atom in atoms:
+            if atom.GetFormalCharge() == 1:
+                oechem.OESuppressHydrogens(atom)  # strip hydrogens from residue
+                atom.SetImplicitHCount(0)
+                atom.SetFormalCharge(0)
+
     else:
         ValueError("dyad_state must be one of ['His41(0) Cys145(0)', 'His41(+) Cys145(-)']")
 
@@ -402,6 +423,7 @@ def prepare_receptor(config: PreparationConfig) -> None:
     print('\t writing docking system...')
     write_docking_system(docking_system, output_filenames, is_thiolate=True)
     errfs.close()
+
 
 def download_fragalysis_latest(structures_path: Path) -> None:
     zip_path = structures_path.joinpath('Mpro.zip')
