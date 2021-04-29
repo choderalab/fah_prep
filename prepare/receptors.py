@@ -91,9 +91,13 @@ def read_pdb_file(pdb_file):
     return mol
 
 
-def is_diamond_structure(pdb_path: Path) -> bool:
-    flag = re.search(r'-x\d+_', str(pdb_path.stem)) is not None
-    return flag
+def crystal_series(pdb_path: Path) -> str:
+    if re.search(r'-x\d+_', str(pdb_path.stem)) is not None:
+        return 'x'
+    if re.search(r'-N\d+_', str(pdb_path.stem)) is not None:
+        return 'N'
+    if re.search(r'-P\d+_', str(pdb_path.stem)) is not None:
+        return 'P'
 
 
 def remove_from_lines(lines: List[str], string: str) -> List[str]:
@@ -132,7 +136,7 @@ def clean_pdb(config: PreparationConfig) -> List[str]:
     with config.input.open() as f:
         pdbfile_lines = f.readlines()
 
-    if is_diamond_structure(config.input) and (not is_in_lines(pdbfile_lines, 'REMARK 350')):
+    if (crystal_series(config.input) == 'x') and (not is_in_lines(pdbfile_lines, 'REMARK 350')):
         pdbfile_lines = add_prefix(pdbfile_lines, BIOLOGICAL_SYMMETRY_HEADER)
 
     if not config.create_dimer:
@@ -367,60 +371,78 @@ def create_dyad(state: str, docking_system: DockingSystem, design_unit: oechem.O
     return design_unit
 
 
-def prepare_receptor(config: PreparationConfig) -> None:
-    output_filenames = create_output_filenames(config)
-
+def options_consistent(config: PreparationConfig) -> bool:
+    flag = True
     if au_is_dimeric(config.input) and (not config.create_dimer):
-        return
+        oechem.OEThrow.Verbose("Can't create monomer from dimer in AU")
+        flag = False
+    if (not au_is_dimeric(config.input)) and (crystal_series(config.input) in ['N', 'P']) and config.create_dimer:
+        oechem.OEThrow.Verbose("Can't create dimer from monomer of N or P series")
+        flag = False
+    return flag
 
-    if already_prepared(output_filenames):
-        return
 
-    print('cleaning pdb...')
-    pdb_lines = clean_pdb(config)
-    print('creating molecular graph...')
-    complex = lines_to_mol_graph(pdb_lines)
-
-    # Some prophylatic measures by JDC - may be redundant in new OE versions
-    print('stripping hydrogens...')
-    complex = strip_hydrogens(complex)
-    print('rebuilding c terminal...')
-    complex = rebuild_c_terminal(complex)
-
-    # Log warnings
-    fname = output_filenames.protein_pdb.parent.joinpath(f"{output_filenames.protein_pdb.stem}.log")
+def create_logger(outputs: OutputPaths) -> oechem.oeofstream:
+    fname = outputs.protein_pdb.parent.joinpath(f"{outputs.protein_pdb.stem}.log")
     errfs = oechem.oeofstream(str(fname)) # create a stream that writes internally to a stream
     oechem.OEThrow.SetOutputStream(errfs)
     oechem.OEThrow.Clear()
-    oechem.OEThrow.SetLevel(oechem.OEErrorLevel_Debug) # capture verbose error output
+    oechem.OEThrow.SetLevel(oechem.OEErrorLevel_Verbose) # capture verbose error output
+    return errfs
+
+
+def prepare_receptor(config: PreparationConfig) -> None:
+
+    output_filenames = create_output_filenames(config)
+
+    errfs = create_logger(output_filenames)
+
+    if not options_consistent(config):
+        oechem.OEThrow.Verbose(f"Options are inconsistent. Ignoring this configuration: \n{config}")
+        errfs.close()
+        return
+
+    oechem.OEThrow.Verbose('cleaning pdb...')
+    pdb_lines = clean_pdb(config)
+    oechem.OEThrow.Verbose('creating molecular graph...')
+    complex = lines_to_mol_graph(pdb_lines)
+
+    # Some prophylatic measures by JDC - may be redundant in new OE versions
+    oechem.OEThrow.Verbose('stripping hydrogens...')
+    complex = strip_hydrogens(complex)
+    oechem.OEThrow.Verbose('rebuilding c terminal...')
+    complex = rebuild_c_terminal(complex)
+
+    # Log warnings
+
 
     # Setup options
-    print('setting options...')
+    oechem.OEThrow.Verbose('setting options...')
     options = set_options()
-    print('creating metadata...')
+    oechem.OEThrow.Verbose('creating metadata...')
     metadata = oespruce.OEStructureMetadata()
 
-    print('making base design unit...')
+    oechem.OEThrow.Verbose('making base design unit...')
     design_unit = make_design_units(complex, metadata, options)[0]
-    print('making base docking system...')
+    oechem.OEThrow.Verbose('making base docking system...')
     docking_sytem = make_docking_system(design_unit)
 
     # Neutral dyad
-    print('making neutral dyad...')
-    print('\t updating design unit...')
+    oechem.OEThrow.Verbose('making neutral dyad...')
+    oechem.OEThrow.Verbose('\t updating design unit...')
     design_unit = create_dyad('His41(0) Cys145(0)', docking_sytem, design_unit, options)
-    print('\t updating docking system...')
+    oechem.OEThrow.Verbose('\t updating docking system...')
     docking_sytem = make_docking_system(design_unit)
-    print('\t writing docking system...')
+    oechem.OEThrow.Verbose('\t writing docking system...')
     write_docking_system(docking_sytem, output_filenames, is_thiolate=False)
 
     # Charge separated dyad
-    print('making catalytic dyad...')
-    print('\t updating design unit...')
+    oechem.OEThrow.Verbose('making catalytic dyad...')
+    oechem.OEThrow.Verbose('\t updating design unit...')
     design_unit = create_dyad('His41(+) Cys145(-1)', docking_sytem, design_unit, options)
-    print('\t updating docking system...')
+    oechem.OEThrow.Verbose('\t updating docking system...')
     docking_system = make_docking_system(design_unit)
-    print('\t writing docking system...')
+    oechem.OEThrow.Verbose('\t writing docking system...')
     write_docking_system(docking_system, output_filenames, is_thiolate=True)
     errfs.close()
 
