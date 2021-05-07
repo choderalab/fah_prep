@@ -283,7 +283,9 @@ def write_molecular_graph(molecule: oechem.OEGraphMol, paths: List[Path]) -> Non
 def write_docking_system(docking_system: DockingSystem, filenames: OutputPaths,
                          is_thiolate: Optional[bool] = False) -> None:
     if is_thiolate:
-        receptor_path = filenames.receptor_thiolate_gzipped
+        receptor_path = filenames.receptor_thiolate_g
+        
+        ped
         protein_path = filenames.protein_thiolate_pdb
     else:
         receptor_path = filenames.receptor_gzipped
@@ -456,7 +458,7 @@ def download_fragalysis_latest(structures_path: Path) -> None:
 
 def get_structures(args: argparse.Namespace) -> List[Path]:
     if not args.structures_directory.exists():
-        download_fragalysis_latest(args.download_directory)
+        download_fragalysis_latest(args.download_directory.absolute())
 
     file_glob = str(args.structures_directory.joinpath(args.structures_filter))
     source_pdb_files = [Path(x) for x in glob.glob(file_glob)]
