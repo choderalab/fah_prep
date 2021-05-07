@@ -456,7 +456,7 @@ def download_fragalysis_latest(structures_path: Path) -> None:
 
 def get_structures(args: argparse.Namespace) -> List[Path]:
     if not args.structures_directory.exists():
-        download_fragalysis_latest(args.structures_directory)
+        download_fragalysis_latest(args.download_directory)
 
     file_glob = str(args.structures_directory.joinpath(args.structures_filter))
     source_pdb_files = [Path(x) for x in glob.glob(file_glob)]
@@ -490,6 +490,9 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Prepare bound structures for free energy calculations.')
     parser.add_argument('-i', dest='structures_directory', type=Path,
                         help='Directory containing the protein/ligand bound PDB files.')
+    parser.add_argument('-d', dest='download_directory', type=Path, 
+                        help='Directory to download Mpro folder if missing',
+                       default='./')
     parser.add_argument('-f', dest='structures_filter', type=str,
                         default="aligned/Mpro-*_0?/Mpro-*_0?_bound.pdb",
                         help='glob filter to find PDB files in structures_directory.')
