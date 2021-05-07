@@ -4,7 +4,7 @@ Suite of functions to prepare Mpro simulations (docking, free energy) for use wi
 ## receptors
 Prepare receptors, protein and ligand PDB files using receptors: 
 ```
-python prepare/receptors.py -i path/to/structures -f 'Mpro-P0047*.pdb' -o ./receptors
+python prepare/receptors.py -i Mpro/crystallographic -f 'Mpro-P0047*.pdb' -o ./receptors
 ```
 * `-i` path to structures directory
 * `-f` glob filter for files
@@ -22,7 +22,6 @@ Cannot control the protonation of the catalytic dyad.
 **To-do**: 
 
 * parallelisation
-* fix thiolate bug
 * covert into command line tool
 * more flexible Spruce options (currently hard-coded)
 * change tests to reflect accurate dyads.
