@@ -29,6 +29,7 @@ class DockingSystem(NamedTuple):
     protein: oechem.OEGraphMol
     ligand: oechem.OEGraphMol
     receptor: oechem.OEGraphMol
+    design_unit: oechem.OEDesignUnit
 
 
 class PreparationConfig(NamedTuple):
@@ -48,6 +49,8 @@ class PreparationConfig(NamedTuple):
 class OutputPaths(NamedTuple):
     receptor_gzipped: Path
     receptor_thiolate_gzipped: Path
+    design_unit_gzipped: Path
+    design_unit_thiolate_gzipped: Path
     protein_pdb: Path
     protein_thiolate_pdb: Path
     ligand_pdb: Path
@@ -184,8 +187,11 @@ def create_output_filenames(config: PreparationConfig) -> OutputPaths:
     prefix = config.output.joinpath(config.input.stem)
     stem = config.input.stem
     outputs = OutputPaths(
+        # TODO: Can we simplify these paths by auto-generating them from a common prefix?
         receptor_gzipped=config.output.joinpath(f'{stem}-receptor.oeb.gz'),
         receptor_thiolate_gzipped=config.output.joinpath(f'{stem}-receptor-thiolate.oeb.gz'),
+        design_unit_gzipped=config.output.joinpath(f'{stem}-designunit.oeb.gz'),
+        design_unit_thiolate_gzipped=config.output.joinpath(f'{stem}-designunit-thiolate.oeb.gz'),
         protein_pdb=config.output.joinpath(f'{stem}-protein.pdb'),
         protein_thiolate_pdb=config.output.joinpath(f'{stem}-protein-thiolate.pdb'),
         ligand_pdb=config.output.joinpath(f'{stem}-ligand.pdb'),
@@ -237,6 +243,10 @@ def make_design_units(complex: oechem.OEGraphMol, metadata: oespruce.OEStructure
 
 
 def make_docking_system(design_unit: oechem.OEDesignUnit) -> DockingSystem:
+    # Make a deep copy of the design unit so it isn't accidentally modified
+    import copy
+    design_unit = copy.deepcopy(design_unit)
+
     protein = oechem.OEGraphMol()
     design_unit.GetProtein(protein)
 
@@ -248,7 +258,8 @@ def make_docking_system(design_unit: oechem.OEDesignUnit) -> DockingSystem:
 
     system = DockingSystem(protein=protein,
                            ligand=ligand,
-                           receptor=receptor)
+                           receptor=receptor,
+                           design_unit=design_unit)
     return system
 
 
@@ -256,6 +267,15 @@ def write_receptor(receptor: oechem.OEGraphMol, paths: List[Path]) -> None:
     for path in paths:
         # if not path.exists():
         oedocking.OEWriteReceptorFile(oechem.OEGraphMol(receptor), str(path))
+
+
+def write_design_unit(design_unit: oechem.OEDesignUnit, paths: List[Path]) -> None:
+    for path in paths:
+        # if not path.exists():
+        print(path, design_unit)
+        ofs = oechem.oeofstream(str(path))
+        oechem.OEWriteDesignUnit(ofs, design_unit)
+        ofs.close()
 
 
 def write_protein(protein: oechem.OEGraphMol, paths: List[Path]) -> None:
@@ -283,14 +303,15 @@ def write_molecular_graph(molecule: oechem.OEGraphMol, paths: List[Path]) -> Non
 def write_docking_system(docking_system: DockingSystem, filenames: OutputPaths,
                          is_thiolate: Optional[bool] = False) -> None:
     if is_thiolate:
-        receptor_path = filenames.receptor_thiolate_g
-        
-        ped
+        design_unit_path = filenames.design_unit_thiolate_gzipped
+        receptor_path = filenames.receptor_thiolate_gzipped
         protein_path = filenames.protein_thiolate_pdb
     else:
+        design_unit_path = filenames.design_unit_gzipped
         receptor_path = filenames.receptor_gzipped
         protein_path = filenames.protein_pdb
 
+    write_design_unit(design_unit=docking_system.design_unit, paths=[design_unit_path])
     write_receptor(receptor=docking_system.receptor, paths=[receptor_path])
     write_protein(protein=docking_system.protein, paths=[protein_path])
     paths = [filenames.ligand_mol2, filenames.ligand_pdb, filenames.ligand_sdf]
