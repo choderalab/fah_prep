@@ -4,26 +4,26 @@ Prepare all SARS-CoV-2 Mpro structures for docking and simulation in monomer and
 This should be run from the covid-moonshot/scripts directory
 
 """
+import os
 from typing import Optional, List, Tuple, NamedTuple, Union
 import re
 from pathlib import Path
 import argparse
-import glob
 import itertools
 import tempfile
+from argparse import ArgumentParser
+import requests
+from zipfile import ZipFile
 
+from rich.progress import track
 from openeye import oespruce
 from openeye import oedocking
 import numpy as np
 from openeye import oechem
-from zipfile import ZipFile
 
 from prepare.constants import (BIOLOGICAL_SYMMETRY_HEADER, SEQRES_DIMER, SEQRES_MONOMER, FRAGALYSIS_URL,
                                MINIMUM_FRAGMENT_SIZE, CHAIN_PDB_INDEX)
 
-
-# structures_path = '../Mpro_tests'
-# output_basepath = '../receptors'
 
 class DockingSystem(NamedTuple):
     protein: oechem.OEGraphMol
@@ -38,10 +38,10 @@ class PreparationConfig(NamedTuple):
     retain_water: Optional[bool] = False
 
     def __str__(self):
-        msg = f"\n{str(self.input.absolute())}" \
-              f"\n{str(self.output.absolute())}" \
-              f"\n{str(self.create_dimer)}" \
-              f"\n{str(self.retain_water)}"
+        msg = f"\n Input path: {str(self.input.absolute())}" \
+              f"\n Output path: {str(self.output.absolute())}" \
+              f"\n Create dimer: {str(self.create_dimer)}" \
+              f"\n Retain water: {str(self.retain_water)}"
         return msg
 
 
@@ -60,12 +60,9 @@ def download_url(url, save_path, chunk_size=128):
     Download file from the specified URL to the specified file path, creating base dirs if needed.
     """
     # Create directory
-    import os
     base_path, filename = os.path.split(save_path)
     os.makedirs(base_path, exist_ok=True)
-    # Download
-    from rich.progress import track
-    import requests
+
     r = requests.get(url, stream=True)
     with open(save_path, 'wb') as fd:
         nchunks = int(int(r.headers['Content-Length'])/chunk_size)
@@ -75,7 +72,6 @@ def download_url(url, save_path, chunk_size=128):
 
 
 def read_pdb_file(pdb_file):
-    #print(f'Reading receptor from {pdb_file}...')
 
     ifs = oechem.oemolistream()
     ifs.SetFlavor(oechem.OEFormat_PDB, oechem.OEIFlavor_PDB_Default | oechem.OEIFlavor_PDB_DATA | oechem.OEIFlavor_PDB_ALTLOC)  # noqa
@@ -391,6 +387,8 @@ def create_logger(outputs: OutputPaths) -> oechem.oeofstream:
     return errfs
 
 
+# def align_complex()
+
 def prepare_receptor(config: PreparationConfig) -> None:
 
     output_filenames = create_output_filenames(config)
@@ -452,28 +450,31 @@ def download_fragalysis_latest(structures_path: Path) -> None:
     download_url(FRAGALYSIS_URL, zip_path)
     with ZipFile(zip_path, 'r') as zip_obj:
         zip_obj.extractall(structures_path)
+    zip_path.unlink()
 
 
 def get_structures(args: argparse.Namespace) -> List[Path]:
-    if not args.structures_directory.exists():
-        download_fragalysis_latest(args.structures_directory)
+    structures_directory = args.structures_directory.absolute()
+    if not structures_directory.exists() or not any(structures_directory.iterdir()):
+        print(f"Downloading and extracting MPro files to {args.structures_directory.absolute()}")
+        download_fragalysis_latest(args.structures_directory.absolute())
 
-    file_glob = str(args.structures_directory.joinpath(args.structures_filter))
-    source_pdb_files = [Path(x) for x in glob.glob(file_glob)]
+
+    source_pdb_files = list(structures_directory.glob(args.structures_filter))
     if len(source_pdb_files) == 0:
-        raise RuntimeError(f'Glob path {args.structures_directory.joinpath(args.structures_filter)} '
+        raise RuntimeError(f'Glob path {structures_directory.joinpath(args.structures_filter)} '
                            f'has matched 0 files.')
-    #TODO - make logger
-    [print(x) for x in source_pdb_files]
     return source_pdb_files
 
 
 def define_prep_configs(args: argparse.Namespace) -> List[PreparationConfig]:
     input_paths = get_structures(args)
-    output_paths = [args.output_directory.joinpath(subdir) for subdir in ['monomer', 'dimer']]
+    output_paths = [args.output_directory.absolute().joinpath(subdir) for subdir in ['monomer', 'dimer']]
+
     products = list(itertools.product(input_paths, output_paths))
     configs = [PreparationConfig(input=x, output=y, create_dimer=y.stem == 'dimer') for x, y in
                products]
+
     return configs
 
 
@@ -485,20 +486,21 @@ def create_output_directories(configs: List[PreparationConfig]) -> None:
             config.output.mkdir(parents=True, exist_ok=True)
 
 
-if __name__ == '__main__':
+def configure_parser(sub_subparser: ArgumentParser):
+    p = sub_subparser.add_parser('receptors')
+    p.add_argument('-i', '--structures-directory', type=Path,
+                   help="Path to MPro directory, doesn't need to exist. Default: './MPro'",
+                   default='./MPro')
+    p.add_argument('-f', '--structures-filter', type=str,
+                   help="Glob filter to find PDB files in structures_directory.",
+                   default="aligned/Mpro-*_0?/Mpro-*_0?_bound.pdb")
+    p.add_argument('-o', '--output-directory', type=Path, help='Path to directory in which to write prepared files',
+                   default='./receptors')
+    p.add_argument('-n', '--dry-run', help='Dry run: file locations will be printed to stdout.', action='store_true')
+    p.set_defaults(func=main)
 
-    parser = argparse.ArgumentParser(description='Prepare bound structures for free energy calculations.')
-    parser.add_argument('-i', dest='structures_directory', type=Path,
-                        help='Directory containing the protein/ligand bound PDB files.')
-    parser.add_argument('-f', dest='structures_filter', type=str,
-                        default="aligned/Mpro-*_0?/Mpro-*_0?_bound.pdb",
-                        help='glob filter to find PDB files in structures_directory.')
-    parser.add_argument('-o', dest='output_directory', type=Path,
-                        help='Directory to write prepared files.')
-    parser.add_argument('-n', dest='dry_run', type=bool, default=False,
-                        help='Only input/output destinations are printed.')
-    args = parser.parse_args()
 
+def main(args, parser) -> None:
     oechem.OEThrow.SetLevel(oechem.OEErrorLevel_Quiet)
 
     configs = define_prep_configs(args)

@@ -33,12 +33,21 @@ A log file is created for each structure.
 
 **To-do**: 
 
-* Get ligand information from SDF file, not from bound protein structure. 
+* get ligand information from SDF file, not from bound protein structure.
+* implement better logger. 
 * parallelisation
 * ~~fix thiolate bug~~
 * ~~covert into command line tool~~
 * more flexible Spruce options (currently hard-coded)
 * change tests to reflect accurate dyads.
+
+
+## ligands
+WIP. setups up combinations of receptors and ligands
+
+## minimize
+WIP. Does OpenMM minimization. 
+
 
 
 
