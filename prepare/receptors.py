@@ -72,7 +72,6 @@ def download_url(url, save_path, chunk_size=128):
 
 
 def read_pdb_file(pdb_file):
-    #print(f'Reading receptor from {pdb_file}...')
 
     ifs = oechem.oemolistream()
     ifs.SetFlavor(oechem.OEFormat_PDB, oechem.OEIFlavor_PDB_Default | oechem.OEIFlavor_PDB_DATA | oechem.OEIFlavor_PDB_ALTLOC)  # noqa
