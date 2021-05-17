@@ -4,27 +4,26 @@ Prepare all SARS-CoV-2 Mpro structures for docking and simulation in monomer and
 This should be run from the covid-moonshot/scripts directory
 
 """
+import os
 from typing import Optional, List, Tuple, NamedTuple, Union
 import re
 from pathlib import Path
 import argparse
-import glob
 import itertools
 import tempfile
 from argparse import ArgumentParser
+import requests
+from zipfile import ZipFile
 
+from rich.progress import track
 from openeye import oespruce
 from openeye import oedocking
 import numpy as np
 from openeye import oechem
-from zipfile import ZipFile
 
 from prepare.constants import (BIOLOGICAL_SYMMETRY_HEADER, SEQRES_DIMER, SEQRES_MONOMER, FRAGALYSIS_URL,
                                MINIMUM_FRAGMENT_SIZE, CHAIN_PDB_INDEX)
 
-
-# structures_path = '../Mpro_tests'
-# output_basepath = '../receptors'
 
 class DockingSystem(NamedTuple):
     protein: oechem.OEGraphMol
@@ -41,8 +40,8 @@ class PreparationConfig(NamedTuple):
     def __str__(self):
         msg = f"\n Input path: {str(self.input.absolute())}" \
               f"\n Output path: {str(self.output.absolute())}" \
-              f"\n Create dimer?: {str(self.create_dimer)}" \
-              f"\n Retain water?: {str(self.retain_water)}"
+              f"\n Create dimer: {str(self.create_dimer)}" \
+              f"\n Retain water: {str(self.retain_water)}"
         return msg
 
 
@@ -61,12 +60,9 @@ def download_url(url, save_path, chunk_size=128):
     Download file from the specified URL to the specified file path, creating base dirs if needed.
     """
     # Create directory
-    import os
     base_path, filename = os.path.split(save_path)
     os.makedirs(base_path, exist_ok=True)
-    # Download
-    from rich.progress import track
-    import requests
+
     r = requests.get(url, stream=True)
     with open(save_path, 'wb') as fd:
         nchunks = int(int(r.headers['Content-Length'])/chunk_size)
@@ -463,6 +459,7 @@ def get_structures(args: argparse.Namespace) -> List[Path]:
     if not structures_directory.exists() or not any(structures_directory.iterdir()):
         print(f"Downloading and extracting MPro files to {args.structures_directory.absolute()}")
         download_fragalysis_latest(args.structures_directory.absolute())
+
 
     source_pdb_files = list(structures_directory.glob(args.structures_filter))
     if len(source_pdb_files) == 0:
