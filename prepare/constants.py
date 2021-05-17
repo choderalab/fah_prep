@@ -107,3 +107,5 @@ FRAGALYSIS_URL='https://fragalysis.diamond.ac.uk/media/targets/Mpro.zip'
 CHAIN_PDB_INDEX = 21
 
 MINIMUM_FRAGMENT_SIZE = 7
+
+ALIGN_PDB = 'Mpro-x1334.pdb'
