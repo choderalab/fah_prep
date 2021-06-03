@@ -58,7 +58,7 @@ crystallographic waters, but this is currently hard-coded to be off.
 * When alternate structures are available, only the first (as defined by Spruce) is used. 
 
 ### Known bugs/problems:
-
+* **There are no unit tests**. 
 * With dimers, the chain containing the ligand site is unpredicatable. e.g., if there is a ligand in both 
 chain A and chain B then it is not clear which chain will contain the receptor site in the design unit.
 * The design units created by Spruce appear to relabel chains (e.g., chain A -> chain B & chain B -> chain A). 
