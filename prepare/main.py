@@ -6,6 +6,7 @@ from __future__ import print_function, absolute_import, division
 
 import sys
 import argparse
+import traceback
 
 from . import receptors
 
@@ -41,5 +42,6 @@ consider sending the following traceback to the MSM Sense GitHub issue tracker a
         https://github.com/RobertArbon/msm_sensitivity/issues
 The error that cause this message was: 
 """
-            print(message, e, file=sys.stderr)
+            # print(message, e, file=sys.stderr)
+            print(traceback.print_tb(e.__traceback__))
             # print(message % __version__, file=sys.stderr)
