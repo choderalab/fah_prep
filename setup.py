@@ -1,6 +1,5 @@
 """
-FAH Prepper
-An example project
+prepare: a suite of functions to prepare simulations from Fragalysis data for use with Folding@Home.
 """
 import sys
 from setuptools import setup, find_packages
@@ -18,6 +17,24 @@ try:
 except:
     long_description = "\n".join(short_description[2:])
 
+# #########################
+VERSION = '0.0.1'
+ISRELEASED = True
+__version__ = VERSION
+# #########################
+
+CLASSIFIERS = """\
+Intended Audience :: Science/Research
+Intended Audience :: Developers
+License :: OSI Approved :: MIT 
+Programming Language :: Python
+Development Status :: beta 
+Topic :: Software Development
+Topic :: Scientific/Engineering
+Operating System :: Unix
+Operating System :: MacOS
+Programming Language :: Python :: 3.8
+"""
 
 setup(
     # Self-descriptive entries which should always be present
@@ -27,10 +44,9 @@ setup(
     description=short_description[0],
     long_description=long_description,
     long_description_content_type="text/markdown",
-    # version=versioneer.get_version(),
-    # cmdclass=versioneer.get_cmdclass(),
+    version=VERSION,
     license='MIT',
-
+    classifiers=CLASSIFIERS.splitlines(),
     # Which Python importable modules should be included when your package is installed
     # Handled automatically by setuptools. Use 'exclude' to prevent some specific
     # subpackage(s) from being added, if needed
@@ -47,17 +63,15 @@ setup(
         'console_scripts': [
             'prepare = prepare.main:main',
         ],
-    }
-    # Additional entries you may want simply uncomment the lines you want and fill in the data
-    # url='http://www.my_package.com',  # Website
-    # install_requires=[],              # Required packages, pulls from pip if needed; do not use for Conda deployment
-    # platforms=['Linux',
-    #            'Mac OS-X',
-    #            'Unix',
-    #            'Windows'],            # Valid platforms your code works on, adjust to your flavor
-    # python_requires=">=3.5",          # Python version restrictions
+    },
+    #Additional entries you may want simply uncomment the lines you want and fill in the data
+    url='https://github.com/choderalab/',  # Website
+    install_requires=[],              # Required packages, pulls from pip if needed; do not use for Conda deployment
+    platforms=['Linux',
+               'Mac OS-X',
+               'Unix'],            # Valid platforms your code works on, adjust to your flavor
+    python_requires=">=3.8",          # Python version restrictions
 
-    # Manual control if final package is compressible or not, set False to prevent the .egg from being made
-    # zip_safe=False,
-
+    #Manual control if final package is compressible or not, set False to prevent the .egg from being made
+    zip_safe=False,
 )
