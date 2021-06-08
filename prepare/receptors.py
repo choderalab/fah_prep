@@ -268,7 +268,6 @@ def write_receptor(receptor: oechem.OEGraphMol, paths: List[Path]) -> None:
 def write_design_unit(design_unit: oechem.OEDesignUnit, paths: List[Path]) -> None:
     for path in paths:
         # if not path.exists():
-        print(path, design_unit)
         ofs = oechem.oeofstream(str(path))
         oechem.OEWriteDesignUnit(ofs, design_unit)
         ofs.close()
