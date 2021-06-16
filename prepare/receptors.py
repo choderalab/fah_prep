@@ -91,12 +91,14 @@ def read_pdb_file(pdb_file):
 
 
 def crystal_series(pdb_path: Path) -> str:
-    if re.search(r'-x\d+_', str(pdb_path.stem)) is not None:
+    if re.search(r'-x\d+', str(pdb_path.stem)) is not None:
         return 'x'
-    if re.search(r'-N\d+_', str(pdb_path.stem)) is not None:
+    if re.search(r'-N\d+', str(pdb_path.stem)) is not None:
         return 'N'
-    if re.search(r'-P\d+_', str(pdb_path.stem)) is not None:
+    if re.search(r'-P\d+', str(pdb_path.stem)) is not None:
         return 'P'
+    else:
+        raise ValueError('Type of crystal form not found.')
 
 
 def remove_from_lines(lines: List[str], string: str) -> List[str]:
@@ -152,6 +154,7 @@ def clean_pdb(config: PreparationConfig) -> List[str]:
             pdbfile_lines = add_prefix(pdbfile_lines, SEQRES_DIMER)
         else:
             pdbfile_lines = add_prefix(pdbfile_lines, SEQRES_MONOMER)
+
 
     return pdbfile_lines
 
